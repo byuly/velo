@@ -190,7 +190,7 @@ Existing social platforms require intentional content creation, editing, and pub
 | SESSION-05 | Session generates a unique invite deep link (valid until deadline) | P0 |
 | SESSION-06 | Max 4 participants per session (creator + 3 invitees) | P0 |
 | SESSION-07 | Only 1 active session per user at a time | P0 |
-| SESSION-08 | Session status lifecycle: `active → generating → complete` | P0 |
+| SESSION-08 | Session status lifecycle: `active → generating → complete / failed` | P0 |
 | SESSION-09 | Session card stored on the calendar on the creation date | P0 |
 | SESSION-10 | All session members notified when a new participant joins | P1 |
 | SESSION-11 | Reminder push 2 hours before deadline | P1 |
@@ -250,14 +250,14 @@ Existing social platforms require intentional content creation, editing, and pub
 | Layer | Technology |
 |---|---|
 | iOS Client | SwiftUI + AVFoundation |
-| Backend API | Go (Gin or Chi) — REST + WebSocket for status updates |
+| Backend API | Go (Chi) — REST |
 | Database | PostgreSQL — users, sessions, participants, clips metadata |
 | File Storage | AWS S3 (raw clips) + CloudFront CDN (final reels) |
 | Job Queue | Redis + Go worker pool |
 | Video Processing | FFmpeg via Go subprocess |
 | Push Notifications | APNs via Go (`apple/apns2`) |
 | Auth | Sign in with Apple + JWT |
-| Hosting | AWS EC2/ECS (API + workers), RDS (Postgres), ElastiCache (Redis) |
+| Hosting | MVP: Single EC2 t3.large running Docker Compose (API + Worker + PostgreSQL + Redis). Post-MVP: ECS + RDS + ElastiCache |
 
 ### 5.2 Data Flow
 
@@ -338,6 +338,9 @@ This is the core technical challenge. The algorithm:
 | `invite_token` | TEXT UNIQUE | Deep link token, valid until deadline |
 | `status` | ENUM | `active` / `generating` / `complete` / `failed` |
 | `reel_url` | TEXT | CDN URL, populated on completion |
+| `retry_count` | INT | Default 0; tracks reel generation retry attempts |
+| `reminder_2h_sent` | BOOLEAN | Default false |
+| `reminder_30m_sent` | BOOLEAN | Default false |
 | `created_at` | TIMESTAMPTZ | |
 
 #### Session Slots
@@ -380,6 +383,15 @@ This is the core technical challenge. The algorithm:
 | `arrived_at` | TIMESTAMPTZ | S3 HeadObject `LastModified` — actual upload time |
 | `recorded_at_clamped` | BOOLEAN | True if `recorded_at` was outside ± 30 min tolerance |
 | `duration_ms` | INT | Clip duration in milliseconds |
+| `created_at` | TIMESTAMPTZ | |
+
+#### Refresh Tokens
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `user_id` | UUID FK | References users |
+| `token_hash` | TEXT | SHA-256 hash of opaque refresh token |
+| `expires_at` | TIMESTAMPTZ | 90 days from issue |
 | `created_at` | TIMESTAMPTZ | |
 
 ---
