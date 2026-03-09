@@ -74,111 +74,37 @@ Code is 12-factor from day 1 for easy migration to ECS + RDS + ElastiCache when 
 
 ## 3. Project Structure
 
+> Exact files and sub-packages will be defined during implementation of each phase. This section captures layout conventions, not a file manifest.
+
 ```
 velo/
 ├── veloprd.md
 ├── architecture.md
 ├── server/
-│   ├── cmd/
-│   │   ├── api/
-│   │   │   └── main.go              # API server entrypoint
-│   │   └── worker/
-│   │       └── main.go              # Worker entrypoint
-│   ├── internal/
-│   │   ├── config/
-│   │   │   └── config.go            # Env-based configuration struct
-│   │   ├── auth/
-│   │   │   ├── apple.go             # Apple identity token validation (JWKS)
-│   │   │   └── jwt.go               # JWT issue, validate, refresh
-│   │   ├── middleware/
-│   │   │   ├── auth.go              # JWT auth middleware
-│   │   │   ├── logging.go           # Request logging
-│   │   │   └── cors.go              # CORS headers
-│   │   ├── handler/
-│   │   │   ├── auth.go              # POST /auth/apple, POST /auth/refresh
-│   │   │   ├── user.go              # GET/PATCH/DELETE /users/me
-│   │   │   ├── session.go           # CRUD sessions, join, invite
-│   │   │   └── clip.go              # Upload URL, confirm upload, get reel
-│   │   ├── model/
-│   │   │   ├── user.go
-│   │   │   ├── session.go
-│   │   │   ├── clip.go
-│   │   │   └── participant.go
-│   │   ├── repository/
-│   │   │   ├── user.go
-│   │   │   ├── session.go
-│   │   │   ├── clip.go
-│   │   │   └── participant.go
-│   │   ├── service/
-│   │   │   ├── auth.go
-│   │   │   ├── session.go
-│   │   │   ├── clip.go
-│   │   │   └── reel.go              # Alignment algorithm + FFmpeg orchestration
-│   │   ├── worker/
-│   │   │   ├── scheduler.go         # Cron: deadline detection, reminder dispatch
-│   │   │   ├── queue.go             # Redis job queue (RPUSH/BLPOP)
-│   │   │   └── reel_job.go          # Reel generation job processor
-│   │   ├── push/
-│   │   │   └── apns.go
-│   │   └── storage/
-│   │       └── s3.go                # Presigned URLs, download, upload
-│   ├── migrations/
-│   │   ├── 000001_create_users.up.sql
-│   │   ├── 000001_create_users.down.sql
-│   │   └── ...
-│   ├── go.mod
-│   ├── go.sum
-│   ├── Dockerfile.api
-│   ├── Dockerfile.worker
+│   ├── cmd/api/          # API server entrypoint
+│   ├── cmd/worker/       # Worker entrypoint
+│   ├── internal/         # All application code (Go convention)
+│   ├── migrations/       # SQL migration files (golang-migrate)
+│   ├── Dockerfile
 │   └── docker-compose.yml
 ├── ios/
 │   └── Velo/
-│       ├── Velo.xcodeproj
-│       ├── App/
-│       │   ├── VeloApp.swift
-│       │   └── AppState.swift       # Global auth state, navigation root
-│       ├── Models/
-│       │   ├── User.swift
-│       │   ├── Session.swift
-│       │   ├── Clip.swift
-│       │   └── Reel.swift
-│       ├── Views/
-│       │   ├── Welcome/
-│       │   │   └── WelcomeView.swift
-│       │   ├── Onboarding/
-│       │   │   └── OnboardingView.swift
-│       │   ├── Home/
-│       │   │   ├── HomeView.swift
-│       │   │   └── CalendarGridView.swift
-│       │   ├── Session/
-│       │   │   ├── CreateSessionView.swift
-│       │   │   ├── SessionView.swift
-│       │   │   └── ClipSlotView.swift
-│       │   ├── Camera/
-│       │   │   └── CameraView.swift
-│       │   ├── Player/
-│       │   │   └── ReelPlayerView.swift
-│       │   └── Settings/
-│       │       └── SettingsView.swift
-│       ├── ViewModels/
-│       │   ├── AuthViewModel.swift
-│       │   ├── HomeViewModel.swift
-│       │   ├── CreateSessionViewModel.swift
-│       │   ├── SessionViewModel.swift
-│       │   ├── CameraViewModel.swift
-│       │   └── ReelPlayerViewModel.swift
-│       ├── Services/
-│       │   ├── APIClient.swift       # URLSession + async/await, auth interceptor
-│       │   ├── AuthService.swift     # Apple sign-in, token management
-│       │   ├── UploadService.swift   # Background URLSession for S3 uploads
-│       │   ├── PushService.swift     # APNs registration + handling
-│       │   └── KeychainService.swift
-│       ├── Camera/
-│       │   └── CameraManager.swift  # AVCaptureSession wrapper
-│       └── Resources/
-│           └── Assets.xcassets
+│       ├── App/          # VeloApp entry point, AppState
+│       ├── Models/       # Codable data models
+│       ├── Views/        # SwiftUI views (grouped by feature)
+│       ├── ViewModels/   # @Observable view models
+│       ├── Services/     # APIClient, UploadService, etc.
+│       ├── Camera/       # AVFoundation capture wrapper
+│       └── Resources/    # Assets, etc.
 └── .gitignore
 ```
+
+### Conventions
+
+- **Go backend**: `handler → service → repository` layering inside `internal/`. Domain packages (auth, session, clip, reel, push, storage) emerge as needed.
+- **iOS**: One ViewModel per major screen. Views grouped by feature folder. Services are singleton-style classes injected via environment.
+- **Migrations**: Numbered sequentially (`000001_...up.sql` / `down.sql`). One migration per schema change.
+- **File naming**: Go uses snake_case. Swift uses PascalCase matching the type name.
 
 ---
 
@@ -453,6 +379,16 @@ ffmpeg -f concat -safe 0 -i sections.txt -c copy output_reel.mp4
 
 **Pass 5** — Upload reel to S3 → update `sessions.reel_url` → push notify all members
 
+### 4.6.1 FFmpeg Risk Mitigation
+
+FFmpeg can handle everything above, but these are the known risks to keep in mind during implementation:
+
+- **Filter graph construction**: `filter_complex` strings are fragile — one wrong label breaks the output silently. Build a small helper that constructs filter graphs from typed inputs, and test it with fixtures (solo, 2-person, 4-person, mixed clip counts).
+- **iPhone video normalization**: iPhones output variable frame rate + rotation metadata. Pre-processing pass must normalize to constant frame rate (`-vsync cfr`) and handle auto-rotation, or stacking filters will desync/rotate panels.
+- **Error handling**: FFmpeg reports errors as stderr text with exit codes. Always capture and log full stderr on failure. Don't try to parse it structurally — just log it for debugging and treat non-zero exit as failure.
+- **Disk I/O**: Multi-pass writes intermediate files to disk. Use a temp directory on fast storage, clean up intermediates after each successful reel, and monitor disk usage on the worker instance.
+- **Keep passes small**: Resist combining passes into one giant filter_complex. The multi-pass approach is intentional — each invocation stays simple, debuggable, and independently testable.
+
 ### 4.7 Job Queue & Scheduler
 
 The worker process runs a `time.Ticker` every 30 seconds with three queries per tick:
@@ -562,13 +498,15 @@ config.sessionSendsLaunchEvents = true
 ```yaml
 services:
   api:
-    build: { dockerfile: Dockerfile.api }
+    build: { context: ., dockerfile: Dockerfile }
+    command: ["/usr/local/bin/api"]
     ports: ["8080:8080"]
     env_file: .env
     depends_on: [postgres, redis]
 
   worker:
-    build: { dockerfile: Dockerfile.worker }
+    build: { context: ., dockerfile: Dockerfile }
+    command: ["/usr/local/bin/worker"]
     env_file: .env
     depends_on: [postgres, redis]
 
