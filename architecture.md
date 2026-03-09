@@ -201,8 +201,8 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `id` | UUID | PK |
 | `session_id` | UUID FK | References sessions |
 | `name` | TEXT | e.g., "Morning", "Midday", or custom |
-| `starts_at` | TIME | Slot start time |
-| `ends_at` | TIME | Slot end time |
+| `starts_at` | TIME | Slot start time (no TZ — interpreted as server local time for MVP) |
+| `ends_at` | TIME | Slot end time; may be less than `starts_at` for overnight slots (e.g., Night: 22:00–02:00) — slot assignment queries must handle this |
 | `slot_order` | INT | Order in the reel |
 
 **slot_participations**
@@ -233,7 +233,7 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `session_id` | UUID FK | |
 | `user_id` | UUID FK | |
 | `slot_id` | UUID FK | Nullable; references session_slots (populated for named_slots, null for auto_slot) |
-| `s3_key` | TEXT | |
+| `s3_key` | TEXT UNIQUE | Unique; used for client-side retry deduplication |
 | `recorded_at` | TIMESTAMPTZ | Device capture time, used for alignment |
 | `arrived_at` | TIMESTAMPTZ | S3 HeadObject `LastModified` (actual upload time) |
 | `recorded_at_clamped` | BOOLEAN | True if outside ±30 min tolerance or before `joined_at` |
@@ -260,6 +260,7 @@ CREATE INDEX idx_clips_session ON clips (session_id);
 CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens (token_hash);
 CREATE INDEX idx_slots_session ON session_slots (session_id);
 CREATE UNIQUE INDEX idx_slot_participations_slot_user ON slot_participations (slot_id, user_id);
+CREATE UNIQUE INDEX idx_clips_s3_key ON clips (s3_key);
 ```
 
 ### 4.4 Upload Flow

@@ -375,12 +375,11 @@ This is the core technical challenge. The algorithm:
 | `session_id` | UUID FK | References sessions |
 | `user_id` | UUID FK | References users |
 | `slot_id` | UUID FK | Nullable; references session_slots (populated for named_slots mode, null for auto_slot) |
-| `s3_key` | TEXT | Raw clip location in S3 |
+| `s3_key` | TEXT UNIQUE | Raw clip location in S3; unique for client-side retry deduplication |
 | `recorded_at` | TIMESTAMPTZ | Device capture time — used for alignment |
 | `arrived_at` | TIMESTAMPTZ | S3 HeadObject `LastModified` — actual upload time |
 | `recorded_at_clamped` | BOOLEAN | True if `recorded_at` was outside ± 30 min tolerance |
 | `duration_ms` | INT | Clip duration in milliseconds |
-| `upload_status` | ENUM | `pending` / `uploaded` / `failed` |
 | `created_at` | TIMESTAMPTZ | |
 
 ---
