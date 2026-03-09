@@ -10,15 +10,21 @@ Velo is a greenfield iOS app + Go backend where 1–4 friends create a session, 
 
 | Topic | Decision |
 |-------|----------|
-| Upload confirmation | Client uploads to S3 via presigned URL, then calls `POST /sessions/:id/clips` to confirm. Backend records `arrived_at` at confirmation time. No S3 event notifications. |
+| **Section-based reel model** | Replaces free-form clip alignment. Sessions use `named_slots` or `auto_slot` mode. Each section has a fixed max duration. Named slots: creator picks preset time windows, each slot = one section. Auto-slot: backend clusters clips by timestamp proximity into buckets at deadline. Within a section, each participant can record 1+ clips totaling ≤ max section duration; remainder is black + name. |
+| **Audio** | One panel's audio plays at a time; rotate active audio source across sections. Advanced mixing/layering deferred to post-MVP. |
+| Upload confirmation | Client uploads to S3 via presigned URL, then calls `POST /sessions/:id/clips` to confirm. No S3 event notifications. |
+| **arrived_at via S3 HeadObject** | At `POST /clips` confirmation, API calls S3 HeadObject → `arrived_at` = S3 `LastModified` (actual upload time, not confirmation time). Fixes delayed-confirmation clamping bug. |
+| **Upload gap recovery** | Client-side retry queue (CoreData). Persists unconfirmed clips locally; retries on next launch or connectivity change. No S3 event notification infra needed for MVP. |
 | Real-time updates | REST only. Push notifications (APNs) + client polling on screen focus handle all real-time needs. No WebSocket. |
 | Reel orientation | Portrait 720×1280. |
-| Zero submitters | Send "No clips were submitted" push to all members. Mark session `complete` with no `reel_url`. |
-| Invite link | Same token stays active until deadline or 4-participant cap is reached. |
-| Simultaneous clips | Play sequentially within that participant's panel. Never drop content. |
+| **Zero submitters** | Push notification: "Session ended — start a new one?" No guilt, forward-looking tone. Mark session `complete` with no `reel_url`. |
+| **Invite links** | Universal Links (`https://velo.app/join/{token}`). Requires domain registration + `apple-app-site-association` file. Works from iMessage, WhatsApp, Instagram DMs, all apps. Same token stays active until deadline or 4-participant cap. |
+| Simultaneous clips | Play sequentially within that participant's panel in a section. Never drop content. |
 | Late joiner clips | If `recorded_at` is before `joined_at`, clamp to `joined_at`. |
 | Join while active | Block with a clear error. Only 1 active session per user at a time. |
 | Reminder idempotency | `reminder_2h_sent` and `reminder_30m_sent` boolean flags on sessions table. |
+| **Home screen intercept** | If user has an active session → app opens to `SessionView` directly (1 tap to record). If no active session → calendar (default). |
+| **Reel retention** | 90-day CDN expiry. "Save to Camera Roll" button in `ReelPlayerView`. Expiry warning at 75 days: "This reel expires in 15 days. Save it to keep it forever." |
 
 ---
 
@@ -219,12 +225,15 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `/users/me` | GET | Yes | — | `{ user }` |
 | `/users/me` | PATCH | Yes | `{ display_name?, avatar_url? }` | `{ user }` |
 | `/users/me` | DELETE | Yes | — | `204 No Content` |
-| `/sessions` | POST | Yes | `{ name?, clip_count, clip_length_tier, deadline }` | `{ session }` |
-| `/sessions/:id` | GET | Yes | — | `{ session, participants, my_clips }` |
-| `/sessions/:id/invite` | GET | Yes | — | `{ invite_url, invite_token }` |
+| `/sessions` | POST | Yes | `{ name?, mode, section_count, max_section_duration_s, deadline, slots? }` | `{ session }` |
+| `/sessions/:id` | GET | Yes | — | `{ session, participants, slots, my_clips }` |
+| `/sessions/:id/invite` | GET | Yes | — | `{ invite_url, invite_token }` (Universal Link format) |
 | `/sessions/join/:token` | POST | Yes | — | `{ session }` |
+| `/sessions/:id/slots` | GET | Yes | — | `{ slots[] }` (named_slots mode) |
+| `/sessions/:id/slots/:slot_id/skip` | POST | Yes | — | `{ slot_participation }` |
+| `/sessions/:id/slots/:slot_id/unskip` | POST | Yes | — | `{ slot_participation }` |
 | `/sessions/:id/clips/upload-url` | POST | Yes | — | `{ upload_url, s3_key }` |
-| `/sessions/:id/clips` | POST | Yes | `{ s3_key, recorded_at, duration_ms }` | `{ clip }` |
+| `/sessions/:id/clips` | POST | Yes | `{ s3_key, recorded_at, duration_ms, slot_id? }` | `{ clip }` |
 | `/sessions/:id/reel` | GET | Yes | — | `{ reel_url, status }` |
 
 ### 4.3 Database Schema
@@ -247,8 +256,9 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `id` | UUID | PK |
 | `creator_id` | UUID FK | References users |
 | `name` | TEXT | Optional, max 40 chars |
-| `clip_count` | INT | 1–6 |
-| `clip_length_tier` | ENUM | `short` / `medium` / `long` |
+| `mode` | ENUM | `named_slots` / `auto_slot` |
+| `section_count` | INT | 1–6 (intent) |
+| `max_section_duration_s` | INT | Max duration per section in seconds (10, 15, 20, or 30) |
 | `deadline` | TIMESTAMPTZ | |
 | `invite_token` | TEXT UNIQUE | Valid until deadline or 4-participant cap |
 | `status` | ENUM | `active` / `generating` / `complete` / `failed` |
@@ -257,6 +267,26 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `reminder_2h_sent` | BOOLEAN | Default false |
 | `reminder_30m_sent` | BOOLEAN | Default false |
 | `created_at` | TIMESTAMPTZ | |
+
+**session_slots**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | UUID | PK |
+| `session_id` | UUID FK | References sessions |
+| `name` | TEXT | e.g., "Morning", "Midday", or custom |
+| `starts_at` | TIME | Slot start time |
+| `ends_at` | TIME | Slot end time |
+| `slot_order` | INT | Order in the reel |
+
+**slot_participations**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | UUID | PK |
+| `slot_id` | UUID FK | References session_slots |
+| `user_id` | UUID FK | References users |
+| `status` | ENUM | `recording` / `skipped` |
 
 **session_participants**
 
@@ -276,9 +306,10 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `id` | UUID | PK |
 | `session_id` | UUID FK | |
 | `user_id` | UUID FK | |
+| `slot_id` | UUID FK | Nullable; references session_slots (populated for named_slots, null for auto_slot) |
 | `s3_key` | TEXT | |
 | `recorded_at` | TIMESTAMPTZ | Device capture time, used for alignment |
-| `arrived_at` | TIMESTAMPTZ | Server receipt time |
+| `arrived_at` | TIMESTAMPTZ | S3 HeadObject `LastModified` (actual upload time) |
 | `recorded_at_clamped` | BOOLEAN | True if outside ±30 min tolerance or before `joined_at` |
 | `duration_ms` | INT | |
 | `created_at` | TIMESTAMPTZ | |
@@ -301,6 +332,8 @@ CREATE UNIQUE INDEX idx_participants_session_user ON session_participants (sessi
 CREATE INDEX idx_participants_user_active ON session_participants (user_id) WHERE status = 'active';
 CREATE INDEX idx_clips_session ON clips (session_id);
 CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens (token_hash);
+CREATE INDEX idx_slots_session ON session_slots (session_id);
+CREATE UNIQUE INDEX idx_slot_participations_slot_user ON slot_participations (slot_id, user_id);
 ```
 
 ### 4.4 Upload Flow
@@ -316,36 +349,57 @@ iOS                           Go API                         S3
  │◄─ 200 OK ─────────────────────────────────────────────────────┤
  │                              │                              │
  ├─ POST /clips ───────────────►│                              │
- │  { s3_key, recorded_at,      ├─ Record arrived_at = now()   │
- │    duration_ms }             ├─ Validate |rec - arr| ≤ 30m  │
+ │  { s3_key, recorded_at,      ├─ HeadObject(s3_key) ─────────►│
+ │    duration_ms, slot_id? }   │◄─ LastModified ───────────────┤
+ │                              ├─ arrived_at = LastModified    │
+ │                              ├─ Validate |rec - arr| ≤ 30m  │
  │                              ├─ Clamp if outside tolerance  │
  │                              ├─ Clamp if rec < joined_at    │
  │◄─ { clip } ─────────────────┤                              │
 ```
 
-### 4.5 Clip Alignment Algorithm
+**Client-side retry queue:** The iOS app persists unconfirmed clips locally (CoreData). If `POST /clips` confirmation fails (network error, app killed), the app retries on next launch or connectivity change. This eliminates the need for S3 event notification infrastructure at MVP scale.
+
+### 4.5 Section-Based Alignment Algorithm
 
 ```
 Input:
+  - session:        { mode, section_count, max_section_duration_s }
+  - slots[]:        { id, name, starts_at, ends_at, slot_order } (named_slots mode only)
   - participants[]: { user_id, display_name_snapshot, joined_at }
-  - clips[]:        { user_id, s3_key, recorded_at, duration_ms }
+  - clips[]:        { user_id, s3_key, recorded_at, duration_ms, slot_id }
+  - skip_marks[]:   { slot_id, user_id } (named_slots mode only)
 
 1. Exclude participants with 0 clips or status = 'excluded'
 2. Order remaining participants: creator first, then by joined_at
-3. Build event timeline:
-   - clip events:  { type: "clip", user_id, recorded_at, duration_ms, s3_key }
-   - join events:  { type: "join", user_id, display_name, timestamp: joined_at }
-     (non-creator participants only)
-4. Sort all events by timestamp
-5. Convert events to reel segments:
-   - "clip"  → segment { duration: clip.duration_ms, panels: [...] }
-               Each panel: video for the clip owner, black + name for everyone else
-   - "join"  → interstitial segment { duration: 1500ms, text: "{name} joined" }
 
-Output: ordered segment list → FFmpeg
+3. BUILD SECTIONS:
+
+   Named Slots path:
+     - For each slot (in slot_order), create a section
+     - Assign clips to sections by slot_id (or by recorded_at falling within slot time window)
+     - Participants who marked a slot as "skip" → black panel for that section
+
+   Auto-Slot path:
+     - Collect all clips across all included participants
+     - Cluster by recorded_at temporal proximity into buckets
+     - Each bucket = one section, ordered chronologically
+     - Assign each clip to its bucket's section
+
+4. FOR EACH SECTION:
+   - For each participant:
+     - Gather their clips for this section, ordered by recorded_at
+     - Total duration = sum of clip durations
+     - If total < max_section_duration_s: pad remainder with black + name
+     - If no clips (or skipped): full black panel + name
+   - Audio: select one panel as the active audio source (rotate per section)
+   - Timestamps: small recorded_at per panel corner; large section label centered
+
+5. Insert "joined session" interstitial panels (1500ms, full-width)
+   at each non-creator participant's joined_at position
+
+Output: ordered section list (with panels per section) → FFmpeg
 ```
-
-No merge window for MVP — clips recorded at similar times play sequentially. Simpler FFmpeg logic with negligible visual difference given typical recording patterns.
 
 ### 4.6 FFmpeg Composition (Multi-Pass)
 
@@ -355,35 +409,46 @@ Panel dimensions by participant count:
 - 3 participants: 720×427 each (vertical stack)
 - 4 participants: 360×640 each (2×2 grid)
 
-**Pass 1 — Pre-process clips** (parallelizable)
+**Pass 1 — Pre-process clips per section** (parallelizable)
+
+For each section, for each participant: concatenate their clips for that section, pad with black if total < max_section_duration_s, add timestamp overlays.
+
 ```bash
+# Per-clip: scale + small recorded_at timestamp in corner
 ffmpeg -i input.mp4 \
-  -vf "scale=720:h_panel,drawtext=text='9\:42 AM':fontsize=24:x=10:y=10:fontcolor=white" \
+  -vf "scale=720:h_panel,drawtext=text='9\:42 AM':fontsize=20:x=10:y=10:fontcolor=white" \
   -c:v libx264 -preset fast -crf 23 processed_{id}.mp4
 ```
 
-**Pass 2 — Generate black panels**
+**Pass 2 — Generate black panels (padding + empty sections)**
 ```bash
 ffmpeg -f lavfi -i "color=black:s=720x{h}:d={dur}" \
   -vf "drawtext=text='Alex':fontsize=36:x=(w-tw)/2:y=(h-th)/2:fontcolor=white@0.5" \
-  black_{participant}_{segment}.mp4
+  black_{participant}_{section}.mp4
 ```
 
-**Pass 3 — Stack panels per segment**
+**Pass 3 — Stack panels per section + audio rotation**
+
+Each section selects one panel as the active audio source (round-robin across sections). Other panels are muted.
+
 ```bash
-# 2 participants
+# 2 participants — section N, panel 0 has audio
 ffmpeg -i top.mp4 -i bottom.mp4 \
-  -filter_complex "[0:v][1:v]vstack=inputs=2" segment_{n}.mp4
+  -filter_complex "[0:v][1:v]vstack=inputs=2[v];[0:a]anull[a]" \
+  -map "[v]" -map "[a]" section_{n}.mp4
 
-# 4 participants
+# 4 participants — section N, panel 2 has audio
 ffmpeg -i tl.mp4 -i tr.mp4 -i bl.mp4 -i br.mp4 \
-  -filter_complex "[0:v][1:v]hstack=inputs=2[top];[2:v][3:v]hstack=inputs=2[bot];[top][bot]vstack=inputs=2" \
-  segment_{n}.mp4
+  -filter_complex "[0:v][1:v]hstack=inputs=2[top];[2:v][3:v]hstack=inputs=2[bot];[top][bot]vstack=inputs=2[v];[2:a]anull[a]" \
+  -map "[v]" -map "[a]" section_{n}.mp4
 ```
 
-**Pass 4 — Concatenate segments**
+**Pass 4 — Add section labels + concatenate**
+
+Large section label (slot name or averaged time) centered on each section segment, then concatenate.
+
 ```bash
-ffmpeg -f concat -safe 0 -i segments.txt -c copy output_reel.mp4
+ffmpeg -f concat -safe 0 -i sections.txt -c copy output_reel.mp4
 ```
 
 **Pass 5** — Upload reel to S3 → update `sessions.reel_url` → push notify all members
@@ -405,11 +470,11 @@ The worker process runs a `time.Ticker` every 30 seconds with three queries per 
 | Event | Recipients | Key Payload Fields |
 |-------|-----------|-------------------|
 | `participant_joined` | All session members | `session_id`, `display_name` |
-| `reminder_2h` | Members with remaining clip slots | `session_id`, `deadline` |
-| `reminder_30m` | Members with remaining clip slots | `session_id`, `deadline` |
+| `reminder_2h` | Members with remaining sections to record | `session_id`, `deadline` |
+| `reminder_30m` | Members with remaining sections to record | `session_id`, `deadline` |
 | `reel_ready` | All session members | `session_id`, `reel_url` |
 | `reel_failed` | Session creator only | `session_id` |
-| `no_clips_submitted` | All session members | `session_id` |
+| `session_ended_no_clips` | All session members | `session_id` — "Session ended — start a new one?" |
 
 ---
 
@@ -419,23 +484,27 @@ The worker process runs a `time.Ticker` every 30 seconds with three queries per 
 
 ```
 VeloApp (@main)
- └─ AppState (auth check)
+ └─ AppState (auth check + active session intercept)
      ├─ Unauthenticated:
      │   └─ WelcomeView
      │       └─ OnboardingView (first launch only)
      │
      └─ Authenticated:
-         └─ NavigationStack
+         ├─ Active session exists → SessionView (1 tap to record)
+         │   └─ CameraView
+         │
+         └─ No active session → NavigationStack
              └─ HomeView (calendar)
                  ├─ CreateSessionView → SessionView
                  ├─ SessionView (active)
                  │   └─ CameraView
-                 ├─ ReelPlayerView (completed)
+                 ├─ ReelPlayerView (completed, save-to-camera-roll, expiry warning)
                  └─ SettingsView
 ```
 
-- `AppState` is `@Observable`, holds auth state and navigation path
-- `VeloApp.onOpenURL` parses `velo://join/{token}` → join flow
+- `AppState` is `@Observable`, holds auth state, navigation path, and **active session check**
+- On launch: `AppState` queries for active session → if found, routes directly to `SessionView`
+- `VeloApp.onOpenURL` handles Universal Links (`https://velo.app/join/{token}`) → join flow
 - Push notification tap routes to `SessionView` or `ReelPlayerView` by payload type
 
 ### 5.2 Key Patterns
@@ -471,8 +540,18 @@ config.sessionSendsLaunchEvents = true
 **CameraManager**:
 - `AVCaptureSession` + `AVCaptureMovieFileOutput`
 - `recorded_at` captured at `fileOutput(_:didStartRecordingTo:from:)` callback
-- Enforces min/max duration per session `clip_length_tier`
+- Enforces max duration per session `max_section_duration_s`
 - Returns local file URL → compression via `AVAssetExportSession` → upload
+
+**UploadRetryQueue** (CoreData-backed):
+```swift
+// CoreData entity: PendingClipConfirmation
+// Fields: s3Key, sessionId, recordedAt, durationMs, slotId?, createdAt
+// On app launch + on connectivity change (NWPathMonitor):
+//   fetch all pending → retry POST /clips for each → delete on success
+```
+- Ensures no clips are lost due to network failures or app termination between S3 upload and API confirmation
+- Retries are idempotent (backend deduplicates by `s3_key`)
 
 ---
 
@@ -514,6 +593,24 @@ volumes:
 - `velo-reels`: generated reels, 90-day lifecycle expiry, served via CloudFront
 - CORS on `velo-clips` for presigned PUT from iOS
 
+### Universal Links
+
+- Domain: `velo.app` (registered via Route 53)
+- Serve `/.well-known/apple-app-site-association` from the API or CDN:
+```json
+{
+  "applinks": {
+    "apps": [],
+    "details": [{
+      "appID": "TEAMID.com.velo.app",
+      "paths": ["/join/*"]
+    }]
+  }
+}
+```
+- iOS app handles `https://velo.app/join/{token}` via `onOpenURL` → join flow
+- Works from iMessage, WhatsApp, Instagram DMs, and all apps (no custom scheme needed)
+
 ### Deployment
 
 - EC2 t3.large (2 vCPU, 8GB — FFmpeg headroom)
@@ -541,18 +638,18 @@ volumes:
 5. OnboardingView (display name + avatar)
 6. HomeView + CalendarGridView (empty state)
 7. CreateSessionView → POST /sessions
-8. Deep link handling (`velo://join/{token}`)
+8. Universal Link handling (`https://velo.app/join/{token}` + `apple-app-site-association`)
 
 ### Phase 3 — Recording
 1. CameraManager (hold-to-record, duration enforcement)
 2. CameraView (record button, timer, preview, retake)
 3. AVAssetExportSession compression
 4. UploadService (Background URLSession → S3)
-5. SessionView (clip slots, upload progress, participant list)
+5. SessionView (section/slot cards, upload progress, participant list)
 6. Clip confirmation (POST /sessions/:id/clips)
 
 ### Phase 4 — Reel Engine
-1. Clip alignment algorithm (`service/reel.go`)
+1. Section-based alignment algorithm (`service/reel.go`) — named slots path + auto-slot clustering
 2. FFmpeg multi-pass wrapper
 3. Reel job processor
 4. Redis queue + worker dequeue loop
@@ -577,7 +674,7 @@ volumes:
 ### Backend
 - `go test ./...` unit tests per package
 - Integration tests with testcontainers-go (Postgres + Redis)
-- Alignment algorithm fixtures: solo, 2-person, 4-person, late joiner, zero submitters
+- Section-based alignment fixtures: solo, 2-person, 4-person, late joiner, zero submitters, named slots, auto-slot clustering
 - FFmpeg output verified: resolution, panel layout, timestamp overlay
 - Scheduler tested with mocked time
 
