@@ -174,13 +174,14 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `avatar_url` | TEXT | S3 URL, nullable |
 | `apns_token` | TEXT | Device push token |
 | `created_at` | TIMESTAMPTZ | |
+| `updated_at` | TIMESTAMPTZ | Profile change tracking, cache invalidation |
 
 **sessions**
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | UUID | PK |
-| `creator_id` | UUID FK | References users |
+| `creator_id` | UUID FK | References users; nullable (ON DELETE SET NULL) |
 | `name` | TEXT | Optional, max 40 chars |
 | `mode` | ENUM | `named_slots` / `auto_slot` |
 | `section_count` | INT | 1–6 (intent) |
@@ -193,6 +194,8 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `reminder_2h_sent` | BOOLEAN | Default false |
 | `reminder_30m_sent` | BOOLEAN | Default false |
 | `created_at` | TIMESTAMPTZ | |
+| `updated_at` | TIMESTAMPTZ | Status transition tracking |
+| `completed_at` | TIMESTAMPTZ | Nullable; set when reel generation finishes |
 
 **session_slots**
 
@@ -252,15 +255,21 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 
 **Indexes:**
 ```sql
+-- Scheduler: find active sessions past their deadline
 CREATE INDEX idx_sessions_deadline_status ON sessions (deadline) WHERE status = 'active';
-CREATE UNIQUE INDEX idx_sessions_invite_token ON sessions (invite_token);
-CREATE UNIQUE INDEX idx_participants_session_user ON session_participants (session_id, user_id);
+-- Note: idx_sessions_invite_token and idx_clips_s3_key are omitted — UNIQUE column constraints already create these indexes
+-- Prevent duplicate joins; NULLs from account deletion are excluded
+CREATE UNIQUE INDEX idx_participants_session_user ON session_participants (session_id, user_id) WHERE user_id IS NOT NULL;
+-- Join flow: check "1 active session per user" constraint
 CREATE INDEX idx_participants_user_active ON session_participants (user_id) WHERE status = 'active';
+-- Reel generation: fetch all clips for a session
 CREATE INDEX idx_clips_session ON clips (session_id);
+-- Token refresh: look up by hash
 CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens (token_hash);
+-- Fetch slots for a session
 CREATE INDEX idx_slots_session ON session_slots (session_id);
+-- One skip/recording decision per user per slot
 CREATE UNIQUE INDEX idx_slot_participations_slot_user ON slot_participations (slot_id, user_id);
-CREATE UNIQUE INDEX idx_clips_s3_key ON clips (s3_key);
 ```
 
 ### 4.4 Upload Flow

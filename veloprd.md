@@ -324,12 +324,13 @@ This is the core technical challenge. The algorithm:
 | `avatar_url` | TEXT | S3 URL, nullable |
 | `apns_token` | TEXT | Device push token |
 | `created_at` | TIMESTAMPTZ | |
+| `updated_at` | TIMESTAMPTZ | Profile change tracking, cache invalidation |
 
 #### Sessions
 | Field | Type | Notes |
 |---|---|---|
 | `id` | UUID | Primary key |
-| `creator_id` | UUID FK | References users |
+| `creator_id` | UUID FK | References users; nullable (ON DELETE SET NULL — session continues if creator deletes account) |
 | `name` | TEXT | Optional, max 40 chars |
 | `mode` | ENUM | `named_slots` / `auto_slot` |
 | `section_count` | INT | 1–6 (intent) |
@@ -342,6 +343,8 @@ This is the core technical challenge. The algorithm:
 | `reminder_2h_sent` | BOOLEAN | Default false |
 | `reminder_30m_sent` | BOOLEAN | Default false |
 | `created_at` | TIMESTAMPTZ | |
+| `updated_at` | TIMESTAMPTZ | Status transition tracking |
+| `completed_at` | TIMESTAMPTZ | Nullable; set when reel generation finishes. Used for expiry calculation and latency monitoring |
 
 #### Session Slots
 | Field | Type | Notes |
