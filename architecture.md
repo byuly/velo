@@ -24,7 +24,8 @@ Velo is a greenfield iOS app + Go backend where 1–4 friends create a session, 
 | Join while active | Block with a clear error. Only 1 active session per user at a time. |
 | Reminder idempotency | `reminder_2h_sent` and `reminder_30m_sent` boolean flags on sessions table. |
 | **Home screen intercept** | If user has an active session → app opens to `SessionView` directly (1 tap to record). If no active session → calendar (default). |
-| **Reel retention** | 90-day CDN expiry. "Save to Camera Roll" button in `ReelPlayerView`. Expiry warning at 75 days: "This reel expires in 15 days. Save it to keep it forever." |
+| **Reel retention** | 90-day CDN expiry. "Save to Camera Roll" button in `ReelPlayerView`. Expiry warning at 75 days: "This reel expires in 15 days. Save it to keep it forever." Expiry warning uses `completed_at + 75 days`, not `created_at`. |
+| **Session cancellation** | Creator can cancel an active session before the deadline (`DELETE /sessions/:id`). Sets status to `cancelled`. Frees the creator's (and participants') single active-session slot. |
 
 ---
 
@@ -161,6 +162,7 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `/sessions/:id/clips/upload-url` | POST | Yes | — | `{ upload_url, s3_key }` |
 | `/sessions/:id/clips` | POST | Yes | `{ s3_key, recorded_at, duration_ms, slot_id? }` | `{ clip }` |
 | `/sessions/:id/reel` | GET | Yes | — | `{ reel_url, status }` |
+| `/sessions/:id` | DELETE | Yes | — | `204 No Content` (creator only, while status = 'active') |
 
 ### 4.3 Database Schema
 
@@ -188,7 +190,7 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `max_section_duration_s` | INT | Max duration per section in seconds (10, 15, 20, or 30) |
 | `deadline` | TIMESTAMPTZ | |
 | `invite_token` | TEXT UNIQUE | Valid until deadline or 4-participant cap |
-| `status` | ENUM | `active` / `generating` / `complete` / `failed` |
+| `status` | ENUM | `active` / `generating` / `complete` / `failed` / `cancelled` |
 | `reel_url` | TEXT | CDN URL, nullable |
 | `retry_count` | INT | Default 0 |
 | `reminder_2h_sent` | BOOLEAN | Default false |
@@ -271,6 +273,21 @@ CREATE INDEX idx_slots_session ON session_slots (session_id);
 -- One skip/recording decision per user per slot
 CREATE UNIQUE INDEX idx_slot_participations_slot_user ON slot_participations (slot_id, user_id);
 ```
+
+### 4.3.1 Concurrency: "1 active session per user" enforcement
+
+The `idx_participants_user_active` partial index supports fast lookups but does not prevent
+race conditions on concurrent joins. The join-session handler must:
+
+1. `BEGIN` transaction
+2. `SELECT id FROM session_participants WHERE user_id = $1 AND status = 'active' FOR UPDATE`
+   — locks the user's active participation row (or acquires an advisory lock if no row exists:
+   `SELECT pg_advisory_xact_lock(hashtext($user_id::text))`)
+3. Check result — if row exists, reject with `ALREADY_IN_SESSION`
+4. `INSERT INTO session_participants ...`
+5. `COMMIT`
+
+This serializes concurrent join attempts for the same user without affecting other users.
 
 ### 4.4 Upload Flow
 
@@ -410,6 +427,13 @@ The worker process runs a `time.Ticker` every 30 seconds with three queries per 
 **Queue**: Redis LIST — `RPUSH` to enqueue, `BLPOP velo:reel_jobs 5` to dequeue (5s timeout for graceful shutdown). Job durability via PostgreSQL `sessions.status`, not Redis.
 
 **Retry**: on failure, increment `retry_count` and re-enqueue with exponential delay (30s → 2min → 10min). After 3 failures: `status = 'failed'`, push notify creator.
+
+**Concurrency:** MVP runs a single worker goroutine processing one reel at a time. On a t3.large
+(2 vCPU), FFmpeg multi-pass saturates the CPU during composition. Concurrent reel generation would
+degrade all reels. If multiple sessions hit deadline simultaneously, they queue and process serially.
+Worst case: 3 sessions × ~3 min each = ~9 min for the last reel (exceeds the 5-min target).
+Acceptable for beta (10–20 users). Post-beta: ECS with dedicated worker tasks enables parallel
+processing.
 
 ### 4.8 Push Notifications
 

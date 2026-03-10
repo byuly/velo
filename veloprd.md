@@ -75,7 +75,7 @@ Existing social platforms require intentional content creation, editing, and pub
 - Reel delivery to all session members via push notification
 - In-app reel playback with save-to-camera-roll option
 - Calendar view — sessions stored on the day they were created
-- Reel expiry warning at 75 days ("This reel expires in 15 days. Save it to keep it forever.")
+- Reel expiry warning 15 days before CDN expiry ("This reel expires in 15 days. Save it to keep it forever.") — based on `completed_at` + 90 days, not session creation date
 - Invite links via Universal Links (`https://velo.app/join/{token}`)
 - Active session intercept — app opens directly to SessionView if user has an active session
 
@@ -164,7 +164,7 @@ Existing social platforms require intentional content creation, editing, and pub
 4. Tapping a session card opens the reel player if ready, or shows a **Generating…** state
 5. Reel plays full-screen with scrubbing controls and timestamp overlay
 6. **Save to Camera Roll** button available in `ReelPlayerView`
-7. At 75 days post-creation, a banner warns: "This reel expires in 15 days. Save it to keep it forever."
+7. At 75 days after reel generation (`completed_at`), a banner warns: "This reel expires in 15 days. Save it to keep it forever."
 
 ---
 
@@ -190,11 +190,12 @@ Existing social platforms require intentional content creation, editing, and pub
 | SESSION-05 | Session generates a unique invite deep link (valid until deadline) | P0 |
 | SESSION-06 | Max 4 participants per session (creator + 3 invitees) | P0 |
 | SESSION-07 | Only 1 active session per user at a time | P0 |
-| SESSION-08 | Session status lifecycle: `active → generating → complete / failed` | P0 |
+| SESSION-08 | Session status lifecycle: `active → generating → complete / failed`; `active → cancelled` (creator cancels before deadline) | P0 |
 | SESSION-09 | Session card stored on the calendar on the creation date | P0 |
 | SESSION-10 | All session members notified when a new participant joins | P1 |
 | SESSION-11 | Reminder push 2 hours before deadline | P1 |
 | SESSION-12 | Reminder push 30 minutes before deadline | P1 |
+| SESSION-13 | Creator can cancel an active session before the deadline | P1 |
 
 ### 4.3 Video Recording & Upload
 
@@ -239,7 +240,7 @@ Existing social platforms require intentional content creation, editing, and pub
 | CAL-05 | Tap a completed session to open the reel player | P0 |
 | CAL-06 | Tap an active session to open the clip recording view | P0 |
 | CAL-07 | Save to Camera Roll button in `ReelPlayerView` | P0 |
-| CAL-08 | Expiry warning banner at 75 days: "This reel expires in 15 days. Save it to keep it forever." | P1 |
+| CAL-08 | Expiry warning banner 15 days before CDN expiry (`completed_at` + 75 days): "This reel expires in 15 days. Save it to keep it forever." | P1 |
 
 ---
 
@@ -411,7 +412,7 @@ This is the core technical challenge. The algorithm:
 | `CreateSessionView` | Configure name, mode (named slots / auto-slot), section count, max section duration, deadline; generate invite link |
 | `SessionView` | Active session: participant list, section/slot cards, record button, upload progress |
 | `CameraView` | AVFoundation hold-to-record, preview, retake |
-| `ReelPlayerView` | Full-screen AVPlayer for completed reel; save-to-camera-roll button; expiry warning banner at 75 days |
+| `ReelPlayerView` | Full-screen AVPlayer for completed reel; save-to-camera-roll button; expiry warning banner 15 days before CDN expiry |
 | `SettingsView` | Display name, avatar, notifications, account deletion |
 
 ### 6.2 Key Technical Notes

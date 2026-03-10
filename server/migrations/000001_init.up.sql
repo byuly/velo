@@ -9,7 +9,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- ============================================================================
 
 CREATE TYPE session_mode AS ENUM ('named_slots', 'auto_slot');
-CREATE TYPE session_status AS ENUM ('active', 'generating', 'complete', 'failed');
+CREATE TYPE session_status AS ENUM ('active', 'generating', 'complete', 'failed', 'cancelled');
 CREATE TYPE participant_status AS ENUM ('active', 'excluded');
 CREATE TYPE slot_participation_status AS ENUM ('recording', 'skipped');
 
