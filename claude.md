@@ -4,6 +4,7 @@
 - **Minimal change**: Fix bugs with the smallest change required unless a deeper architectural issue is clearly the root cause.
 - **Elegance check**: For non-trivial changes, ask "is there a more elegant solution?" Skip for simple fixes.
 - **When stuck**: If blocked, uncertain about direction, or facing an architectural decision → move to conflict resolution.
+- **No Shortcuts**: When stuck, find the root cause of the problem. not masking it. move to conflict resolution.
 
 ## Before Touching Code
 Read the full file. Find related functions, tests, and references. Understand the existing pattern before introducing a new one. Don't assume APIs exist — search first.
