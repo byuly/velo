@@ -10,7 +10,7 @@ Velo is a greenfield iOS app + Go backend where 1–4 friends create a session, 
 
 | Topic | Decision |
 |-------|----------|
-| **Section-based reel model** | Replaces free-form clip alignment. Sessions use `named_slots` or `auto_slot` mode. Each section has a fixed max duration. Named slots: creator picks preset time windows, each slot = one section. Auto-slot: backend clusters clips by timestamp proximity into buckets at deadline. Within a section, each participant can record 1+ clips totaling ≤ max section duration; remainder is black + name. |
+| **Section-based reel model** | Replaces free-form clip alignment. MVP uses `named_slots` mode only (auto-slot deferred to v1.1). Each section has a fixed max duration. Creator picks preset time windows, each slot = one section. Within a section, each participant can record 1+ clips totaling ≤ max section duration; remainder is black + name. |
 | **Audio** | One panel's audio plays at a time; rotate active audio source across sections. Advanced mixing/layering deferred to post-MVP. |
 | Upload confirmation | Client uploads to S3 via presigned URL, then calls `POST /sessions/:id/clips` to confirm. No S3 event notifications. |
 | **arrived_at via S3 HeadObject** | At `POST /clips` confirmation, API calls S3 HeadObject → `arrived_at` = S3 `LastModified` (actual upload time, not confirmation time). Fixes delayed-confirmation clamping bug. |
@@ -185,7 +185,7 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `id` | UUID | PK |
 | `creator_id` | UUID FK | References users; nullable (ON DELETE SET NULL) |
 | `name` | TEXT | Optional, max 40 chars |
-| `mode` | ENUM | `named_slots` / `auto_slot` |
+| `mode` | ENUM | `named_slots` / `auto_slot` (enum kept for forward compat; MVP only accepts `named_slots`) |
 | `section_count` | INT | 1–6 (intent) |
 | `max_section_duration_s` | INT | Max duration per section in seconds (10, 15, 20, or 30) |
 | `deadline` | TIMESTAMPTZ | |
@@ -237,7 +237,7 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `id` | UUID | PK |
 | `session_id` | UUID FK | |
 | `user_id` | UUID FK | |
-| `slot_id` | UUID FK | Nullable; references session_slots (populated for named_slots, null for auto_slot) |
+| `slot_id` | UUID FK | Nullable; references session_slots (populated for named_slots; nullable column kept for future auto_slot support) |
 | `s3_key` | TEXT UNIQUE | Unique; used for client-side retry deduplication |
 | `recorded_at` | TIMESTAMPTZ | Device capture time, used for alignment |
 | `arrived_at` | TIMESTAMPTZ | S3 HeadObject `LastModified` (actual upload time) |
@@ -326,18 +326,10 @@ Input:
 1. Exclude participants with 0 clips or status = 'excluded'
 2. Order remaining participants: creator first, then by joined_at
 
-3. BUILD SECTIONS:
-
-   Named Slots path:
+3. BUILD SECTIONS (Named Slots):
      - For each slot (in slot_order), create a section
      - Assign clips to sections by slot_id (or by recorded_at falling within slot time window)
      - Participants who marked a slot as "skip" → black panel for that section
-
-   Auto-Slot path:
-     - Collect all clips across all included participants
-     - Cluster by recorded_at temporal proximity into buckets
-     - Each bucket = one section, ordered chronologically
-     - Assign each clip to its bucket's section
 
 4. FOR EACH SECTION:
    - For each participant:
@@ -602,6 +594,13 @@ volumes:
 6. S3 presigned URL generation
 7. Health check endpoint
 
+### Phase 1.5 — FFmpeg Spike (de-risk reel engine — see issue #5)
+1. Record sample iPhone clips (2 clips, different lighting)
+2. Normalize VFR → CFR, handle rotation metadata
+3. Validate multi-pass pipeline: scale → overlay → vstack → concat
+4. Test all layouts: 1-panel, 2-panel, 4-panel
+5. Document working commands in `docs/ffmpeg-spike.md`
+
 ### Phase 2 — Core iOS
 1. Xcode project, SPM setup
 2. AppState + navigation skeleton
@@ -621,7 +620,7 @@ volumes:
 6. Clip confirmation (POST /sessions/:id/clips)
 
 ### Phase 4 — Reel Engine
-1. Section-based alignment algorithm (`service/reel.go`) — named slots path + auto-slot clustering
+1. Section-based alignment algorithm (`service/reel.go`) — named slots path
 2. FFmpeg multi-pass wrapper
 3. Reel job processor
 4. Redis queue + worker dequeue loop
@@ -646,7 +645,7 @@ volumes:
 ### Backend
 - `go test ./...` unit tests per package
 - Integration tests with testcontainers-go (Postgres + Redis)
-- Section-based alignment fixtures: solo, 2-person, 4-person, late joiner, zero submitters, named slots, auto-slot clustering
+- Section-based alignment fixtures: solo, 2-person, 4-person, late joiner, zero submitters, named slots
 - FFmpeg output verified: resolution, panel layout, timestamp overlay
 - Scheduler tested with mocked time
 

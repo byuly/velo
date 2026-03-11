@@ -36,8 +36,7 @@ Existing social platforms require intentional content creation, editing, and pub
 | **Clip** | A single short video recorded by a participant. One or more clips fit within a section, totaling ≤ the max section duration. |
 | **Reel** | The auto-generated split-screen video combining all participants' clips, organized by sections. Delivered at the session deadline. |
 | **Panel** | One participant's visual area within a reel section. Shows their clip(s) or black + name if they have no content for that section. |
-| **Bucket** | (Auto-slot mode only) A group of clips clustered by timestamp proximity. Each bucket becomes one section in the reel. |
-| **Intent** | The expected number of sections/clips per day, set by the session creator. In auto-slot mode, this guides expectations but isn't strictly enforced. |
+| **Intent** | The expected number of sections/clips per day, set by the session creator. |
 | **Skip** | A participant's explicit opt-out from a specific slot (Named Slots mode). Their panel shows black + name for that section. |
 
 ### 1.3 Target Users
@@ -62,7 +61,7 @@ Existing social platforms require intentional content creation, editing, and pub
 - User authentication (Sign in with Apple)
 - Session creation — the session is the invite unit, no persistent groups
 - Session invite link for up to 3 additional participants (4 total including creator)
-- Session modes: **Named Slots** (preset time windows) or **Auto-Slot** (free recording, clustered at deadline)
+- Session mode: **Named Slots** (preset time windows with defined recording slots)
 - Session settings: section count (1–6), max section duration (e.g., 10s, 15s, 20s, 30s), deadline
 - Solo sessions — 1-person vlogs produce a single-panel reel
 - In-app short-form video recording
@@ -80,6 +79,7 @@ Existing social platforms require intentional content creation, editing, and pub
 - Active session intercept — app opens directly to SessionView if user has an active session
 
 ### 2.2 Out of Scope — MVP
+- **Auto-Slot mode** (free recording with timestamp-based clustering) — deferred to v1.1
 - Persistent groups (no group object — sessions are self-contained)
 - Emoji reactions or any social engagement features
 - Android support
@@ -104,20 +104,16 @@ Existing social platforms require intentional content creation, editing, and pub
 1. Creator taps **New Session**
 2. Configures session settings:
    - **Session name:** optional, max 40 chars (defaults to "Session — [date]")
-   - **Session mode:** Named Slots or Auto-Slot
    - **Section count:** 1–6 sections expected per day (intent)
    - **Max section duration:** fixed length per section in seconds (10s, 15s, 20s, or 30s)
    - **Deadline:** date + time picker (must be at least 1 hour from now)
-3. If **Named Slots** mode:
-   - Creator picks from preset time windows: Morning (6–10), Midday (10–14), Afternoon (14–18), Evening (18–22), Night (22–2), or defines custom slots
-   - Each slot maps to one section in the final reel
-4. If **Auto-Slot** mode:
-   - Creator sets section count intent (e.g., "4 clips today")
-   - Participants record freely throughout the day
-   - At deadline, backend clusters all clips by `recorded_at` timestamps to form buckets; each bucket = one section
+3. Creator picks from preset time windows: Morning (6–10), Midday (10–14), Afternoon (14–18), Evening (18–22), Night (22–2), or defines custom slots
+4. Each slot maps to one section in the final reel
 5. Creator optionally invites up to 3 friends via a shareable Universal Link (`https://velo.app/join/{token}`)
 6. Session goes live immediately — creator can start recording right away
 7. Session card appears on the calendar on today's date
+
+> **Note:** Auto-Slot mode (free recording with timestamp-based clustering) is deferred to v1.1. MVP uses Named Slots only.
 
 ### 3.3 Joining a Session
 1. Invited user taps the Universal Link (valid until session deadline)
@@ -129,7 +125,7 @@ Existing social platforms require intentional content creation, editing, and pub
 
 ### 3.4 Clip Recording
 1. User opens an active session
-2. **Named Slots mode:** sees slot cards (e.g., Morning, Midday, etc.) with status (recorded / pending / skipped). **Auto-Slot mode:** sees section count intent and a record button.
+2. Sees slot cards (e.g., Morning, Midday, etc.) with status (recorded / pending / skipped)
 3. Taps record to open the camera
 4. Hold-to-record; each clip must be ≤ max section duration. Within a section, a participant can record 1 or more clips totaling ≤ the max section duration.
 5. Preview clip — option to retake or confirm
@@ -144,9 +140,7 @@ Existing social platforms require intentional content creation, editing, and pub
 2. Members who submitted no clips are excluded entirely
 3. Members who deleted their account before the deadline are excluded entirely
 4. The backend validates each clip's `recorded_at` against its `arrived_at` (S3 `LastModified` via HeadObject) — clips outside a ± 30 minute tolerance are flagged and clamped
-5. **Section assembly:**
-   - **Named Slots mode:** each slot = one section; clips are assigned to the slot whose time window contains their `recorded_at`
-   - **Auto-Slot mode:** all clips across all participants are clustered by temporal proximity into buckets; each bucket = one section
+5. **Section assembly:** each slot = one section; clips are assigned to the slot whose time window contains their `recorded_at`
 6. Within each section, participants' clips play side-by-side in their panels
 7. When a member has no clip for a section (or marked "skip"), their panel is black with their name displayed
 8. **Audio:** only one panel's audio plays at any given moment; rotate which panel is the active audio source across sections
@@ -184,7 +178,7 @@ Existing social platforms require intentional content creation, editing, and pub
 | ID | Requirement | Priority |
 |---|---|---|
 | SESSION-01 | Creator sets optional session name (max 40 chars) | P0 |
-| SESSION-02 | Creator sets session mode: `named_slots` or `auto_slot` | P0 |
+| SESSION-02 | Session mode is `named_slots` (auto-slot deferred to v1.1) | P0 |
 | SESSION-03 | Creator sets section count (1–6) and max section duration (10s / 15s / 20s / 30s) | P0 |
 | SESSION-04 | Creator sets a deadline (min 1 hour from now) | P0 |
 | SESSION-05 | Session generates a unique invite deep link (valid until deadline) | P0 |
@@ -218,7 +212,7 @@ Existing social platforms require intentional content creation, editing, and pub
 | REEL-02 | Members with zero submitted clips are excluded from the reel | P0 |
 | REEL-03 | Members who deleted their account before deadline are excluded | P0 |
 | REEL-04 | `recorded_at` validated against `arrived_at` (S3 HeadObject `LastModified`); clamped if outside ± 30 min tolerance | P0 |
-| REEL-05 | Clips organized into sections: by slot assignment (named_slots) or by temporal clustering into buckets (auto_slot) | P0 |
+| REEL-05 | Clips organized into sections by slot assignment (named_slots) | P0 |
 | REEL-06 | Layout scales by participant count: 1 = full-screen; 2 = 50/50; 3 = 33/33/33; 4 = two rows | P0 |
 | REEL-07 | Black panel + member name when no clip exists for a section (or slot marked "skip") | P0 |
 | REEL-08 | "Joined session" marker rendered as a brief full-width interstitial panel at join time | P0 |
@@ -291,9 +285,7 @@ This is the core technical challenge. The algorithm:
 1. At deadline, fetch all clips and join events grouped by participant
 2. Exclude any participant with zero submitted clips or a deleted account
 3. Order remaining participants: creator first, then by `joined_at`
-4. **Build sections:**
-   - **Named Slots mode:** each slot (in `slot_order`) = one section. Clips are assigned to the slot whose time window contains their `recorded_at`. Participants who marked a slot as "skip" get a black panel.
-   - **Auto-Slot mode:** cluster all clips across all participants by `recorded_at` temporal proximity into buckets. Each bucket = one section. Order sections chronologically.
+4. **Build sections:** each slot (in `slot_order`) = one section. Clips are assigned to the slot whose time window contains their `recorded_at`. Participants who marked a slot as "skip" get a black panel.
 5. For each section:
    - Each participant's clips for that section play sequentially in their panel, totaling ≤ max section duration
    - If total content < max section duration, remainder is black + participant name
@@ -333,7 +325,7 @@ This is the core technical challenge. The algorithm:
 | `id` | UUID | Primary key |
 | `creator_id` | UUID FK | References users; nullable (ON DELETE SET NULL — session continues if creator deletes account) |
 | `name` | TEXT | Optional, max 40 chars |
-| `mode` | ENUM | `named_slots` / `auto_slot` |
+| `mode` | ENUM | `named_slots` / `auto_slot` (enum kept for forward compat; MVP only accepts `named_slots`) |
 | `section_count` | INT | 1–6 (intent) |
 | `max_section_duration_s` | INT | Max duration per section in seconds (10, 15, 20, or 30) |
 | `deadline` | TIMESTAMPTZ | Creator-set cutoff |
@@ -381,7 +373,7 @@ This is the core technical challenge. The algorithm:
 | `id` | UUID | Primary key |
 | `session_id` | UUID FK | References sessions |
 | `user_id` | UUID FK | References users |
-| `slot_id` | UUID FK | Nullable; references session_slots (populated for named_slots mode, null for auto_slot) |
+| `slot_id` | UUID FK | Nullable; references session_slots (populated for named_slots; nullable kept for future auto_slot support) |
 | `s3_key` | TEXT UNIQUE | Raw clip location in S3; unique for client-side retry deduplication |
 | `recorded_at` | TIMESTAMPTZ | Device capture time — used for alignment |
 | `arrived_at` | TIMESTAMPTZ | S3 HeadObject `LastModified` — actual upload time |
@@ -409,7 +401,7 @@ This is the core technical challenge. The algorithm:
 | `WelcomeView` | App launch, Sign in with Apple CTA |
 | `OnboardingView` | Display name + avatar setup (first launch only) |
 | `HomeView` | Monthly calendar, session dot indicators, session cards. **Active session intercept:** if user has an active session, app opens directly to `SessionView` (1 tap to record). If no active session, opens to calendar. |
-| `CreateSessionView` | Configure name, mode (named slots / auto-slot), section count, max section duration, deadline; generate invite link |
+| `CreateSessionView` | Configure name, section count, max section duration, deadline, named slots; generate invite link |
 | `SessionView` | Active session: participant list, section/slot cards, record button, upload progress |
 | `CameraView` | AVFoundation hold-to-record, preview, retake |
 | `ReelPlayerView` | Full-screen AVPlayer for completed reel; save-to-camera-roll button; expiry warning banner 15 days before CDN expiry |
@@ -469,6 +461,13 @@ This is the core technical challenge. The algorithm:
 - Sign in with Apple + JWT auth flow
 - AWS S3 bucket setup and presigned URL generation
 
+### Phase 1.5 — FFmpeg Spike (de-risk reel engine)
+- Record sample iPhone clips (2 clips, different lighting)
+- Normalize VFR → CFR, handle rotation metadata
+- Validate multi-pass pipeline: scale → overlay → vstack → concat
+- Test all layouts: 1-panel, 2-panel, 4-panel
+- Document working commands in `docs/ffmpeg-spike.md`
+
 ### Phase 2 — Core iOS
 - SwiftUI app shell and navigation structure
 - Auth flow (Sign in with Apple, JWT storage in Keychain)
@@ -484,7 +483,7 @@ This is the core technical challenge. The algorithm:
 
 ### Phase 4 — Reel Engine
 - Timestamp validation (`recorded_at` vs `arrived_at`, ± 30 min tolerance + clamping)
-- Section-based alignment algorithm (named slots path + auto-slot clustering path)
+- Section-based alignment algorithm (named slots path)
 - Single-panel reel path for solo sessions
 - FFmpeg split-screen composition (vstack, drawtext, concat)
 - Redis job queue and Go worker pool
@@ -517,10 +516,10 @@ This is the core technical challenge. The algorithm:
 - ~~**Clips in the same time-slot:**~~ → Resolved by section-based model. Multiple clips play sequentially within a section, totaling ≤ max section duration. Never drop content.
 
 ### Remaining Pre-Development Decisions
-- **Auto-slot clustering threshold:** What temporal proximity threshold should be used to group clips into buckets? (e.g., 30min, 1h, adaptive based on session duration)
 - **Slot time zone handling:** How to handle slots when participants are in different time zones?
 
 ### Post-MVP Considerations
+- **Auto-slot mode:** free recording with timestamp-based clustering at deadline (deferred from MVP — requires clustering algorithm design, threshold tuning, and bucket alignment logic)
 - Emoji reactions on reel panels
 - Android support
 - More than 4 participants per session
