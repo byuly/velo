@@ -7,6 +7,21 @@ type Config struct {
 	LogLevel    string `env:"LOG_LEVEL" envDefault:"info"`
 	DatabaseURL string `env:"DATABASE_URL,required"`
 	RedisAddr   string `env:"REDIS_ADDR,required"`
+
+	// JWT
+	JWTSecret string `env:"JWT_SECRET,required"`
+	JWTIssuer string `env:"JWT_ISSUER" envDefault:"velo"`
+
+	// Apple
+	AppleAppID string `env:"APPLE_APP_ID,required"`
+
+	// AWS / S3
+	AWSRegion          string `env:"AWS_REGION,required"`
+	AWSAccessKeyID     string `env:"AWS_ACCESS_KEY_ID,required"`
+	AWSSecretAccessKey string `env:"AWS_SECRET_ACCESS_KEY,required"`
+	S3ClipsBucket      string `env:"S3_CLIPS_BUCKET,required"`
+	S3ReelsBucket      string `env:"S3_REELS_BUCKET,required"`
+	CloudFrontDomain   string `env:"CLOUDFRONT_DOMAIN,required"`
 }
 
 func Load() (*Config, error) {
