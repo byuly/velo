@@ -21,7 +21,7 @@ type Config struct {
 	AWSSecretAccessKey string `env:"AWS_SECRET_ACCESS_KEY,required"`
 	S3ClipsBucket      string `env:"S3_CLIPS_BUCKET,required"`
 	S3ReelsBucket      string `env:"S3_REELS_BUCKET,required"`
-	CloudFrontDomain   string `env:"CLOUDFRONT_DOMAIN,required"`
+	CloudFrontDomain   string `env:"CLOUDFRONT_DOMAIN required"`
 }
 
 func Load() (*Config, error) {
