@@ -346,7 +346,11 @@ Input:
 Output: ordered section list (with panels per section) → FFmpeg
 ```
 
-### 4.6 FFmpeg Composition (Multi-Pass)
+### 4.6 FFmpeg Composition (Two-Phase Pipeline)
+
+> Full design in `docs/ffmpeg-spike.md` Section 8.6. This section summarizes the architecture.
+
+Processing is split into two phases to minimize deadline-to-reel latency. The expensive codec re-encode runs eagerly as slots close; the layout-dependent work runs at deadline when final participant count is known.
 
 Panel dimensions by participant count:
 - 1 participant: 720×1280 (full screen)
@@ -354,67 +358,74 @@ Panel dimensions by participant count:
 - 3 participants: 720×427 each (vertical stack)
 - 4 participants: 360×640 each (2×2 grid)
 
-**Pass 1 — Pre-process clips per section** (parallelizable)
+#### Phase 1 — Slot-end normalization (eager)
 
-For each section, for each participant: concatenate their clips for that section, pad with black if total < max_section_duration_s, add timestamp overlays.
-
-```bash
-# Per-clip: scale + small recorded_at timestamp in corner
-ffmpeg -i input.mp4 \
-  -vf "scale=720:h_panel,drawtext=text='9\:42 AM':fontsize=20:x=10:y=10:fontcolor=white" \
-  -c:v libx264 -preset fast -crf 23 processed_{id}.mp4
-```
-
-**Pass 2 — Generate black panels (padding + empty sections)**
-```bash
-ffmpeg -f lavfi -i "color=black:s=720x{h}:d={dur}" \
-  -vf "drawtext=text='Alex':fontsize=36:x=(w-tw)/2:y=(h-th)/2:fontcolor=white@0.5" \
-  black_{participant}_{section}.mp4
-```
-
-**Pass 3 — Stack panels per section + audio rotation**
-
-Each section selects one panel as the active audio source (round-robin across sections). Other panels are muted.
+Triggered when slot `ends_at + 10 min grace` passes. For each clip in the slot:
 
 ```bash
-# 2 participants — section N, panel 0 has audio
-ffmpeg -i top.mp4 -i bottom.mp4 \
-  -filter_complex "[0:v][1:v]vstack=inputs=2[v];[0:a]anull[a]" \
-  -map "[v]" -map "[a]" section_{n}.mp4
-
-# 4 participants — section N, panel 2 has audio
-ffmpeg -i tl.mp4 -i tr.mp4 -i bl.mp4 -i br.mp4 \
-  -filter_complex "[0:v][1:v]hstack=inputs=2[top];[2:v][3:v]hstack=inputs=2[bot];[top][bot]vstack=inputs=2[v];[2:a]anull[a]" \
-  -map "[v]" -map "[a]" section_{n}.mp4
+# VFR→CFR 30fps, CRF 23 re-encode at ORIGINAL resolution (720×1280)
+# No scaling — panel dims depend on final participant count (unknown until deadline)
+# Audio PRESERVED — needed for audio rotation in Phase 2
+ffmpeg -y -i raw_clip.mov \
+  -vf "fps=30" \
+  -c:v libx264 -preset fast -crf 23 \
+  -c:a aac -b:a 128k -ac 2 \
+  normalized.mp4
 ```
 
-**Pass 4 — Add section labels + concatenate**
+Normalized clips uploaded to S3 (`normalized/{sessionID}/{clipID}.mp4`). The `clips.normalized_s3_key` column tracks completion; NULL = not yet processed.
 
-Large section label (slot name or averaged time) centered on each section segment, then concatenate.
+> **Note:** `drawtext` (timestamp overlay) requires `brew install ffmpeg-full` which includes libfreetype. Standard `brew install ffmpeg` does not support it. Timestamp overlays are deferred — the `timestamp`/`name` parameters in `NormalizeClip`/`GenerateBlackPanel` are reserved for when the full formula is present. See spike doc Section 6 for details.
+
+#### Phase 2 — Deadline composition (fast)
+
+Triggered when session deadline passes. Downloads pre-normalized clips (~1–2 Mbps each, already re-encoded).
 
 ```bash
-ffmpeg -f concat -safe 0 -i sections.txt -c copy output_reel.mp4
+# Scale-only pass — fast, no re-encode
+ffmpeg -y -i normalized.mp4 \
+  -vf "scale=720:640" \
+  -c:v libx264 -preset fast -crf 23 \
+  scaled.mp4
 ```
 
-**Pass 5** — Upload reel to S3 → update `sessions.reel_url` → push notify all members
+Then per section, per participant:
+1. **Scale** normalized clips to `PanelDimsFor(finalParticipantCount)`
+2. **Concat** participant's clips for the section
+3. **Pad** remainder with black panel (silent AAC + color=black)
+
+Per section:
+4. **Stack** panels — vstack (2–3 participants) or 2×2 grid (4 participants)
+5. **Audio rotation** — one participant's audio per section: `audioIdx = sectionIdx % len(participants)`
+
+Final:
+6. **Concat** all sections into final reel (`-f concat -safe 0`)
+7. Upload to S3, update `sessions.reel_url`, push notify
+
+**Late clip handling:** If `normalized_s3_key` is NULL (clip arrived after slot normalization window, e.g. CoreData retry), normalize inline during Phase 2 as a fallback.
+
+#### NormalizeClip split
+
+The spike's `NormalizeClip(path, dims, timestamp)` combines VFR fix + scale. The two-phase design requires:
+- `NormalizeClip(path, timestamp)` — Phase 1: VFR→CFR + CRF 23 at original resolution, audio preserved
+- `ScaleClip(path, dims)` — Phase 2: scale-only pass
 
 ### 4.6.1 FFmpeg Risk Mitigation
 
-FFmpeg can handle everything above, but these are the known risks to keep in mind during implementation:
-
-- **Filter graph construction**: `filter_complex` strings are fragile — one wrong label breaks the output silently. Build a small helper that constructs filter graphs from typed inputs, and test it with fixtures (solo, 2-person, 4-person, mixed clip counts).
-- **iPhone video normalization**: iPhones output variable frame rate + rotation metadata. Pre-processing pass must normalize to constant frame rate (`-vsync cfr`) and handle auto-rotation, or stacking filters will desync/rotate panels.
+- **Filter graph construction**: `filter_complex` strings are fragile — one wrong label breaks the output silently. The `buildFilterGraph` helper in `internal/ffmpeg/composer.go` constructs filter graphs from typed inputs. Tested with 1/2/4 participant fixtures.
+- **iPhone video normalization**: iPhones output variable frame rate + rotation metadata. Use `-vf fps=30` (not the deprecated `-vsync cfr`) and rely on FFmpeg's autorotate (enabled by default since FFmpeg 4+).
 - **Error handling**: FFmpeg reports errors as stderr text with exit codes. Always capture and log full stderr on failure. Don't try to parse it structurally — just log it for debugging and treat non-zero exit as failure.
 - **Disk I/O**: Multi-pass writes intermediate files to disk. Use a temp directory on fast storage, clean up intermediates after each successful reel, and monitor disk usage on the worker instance.
 - **Keep passes small**: Resist combining passes into one giant filter_complex. The multi-pass approach is intentional — each invocation stays simple, debuggable, and independently testable.
 
 ### 4.7 Job Queue & Scheduler
 
-The worker process runs a `time.Ticker` every 30 seconds with three queries per tick:
+The worker process runs a `time.Ticker` every 30 seconds with four queries per tick:
 
-1. **Deadline detection**: sessions where `status = 'active' AND deadline <= now()` → atomically set `status = 'generating'` → `RPUSH velo:reel_jobs {session_id}`
-2. **2h reminder**: sessions where deadline is within the next 2h window and `reminder_2h_sent = false` → send push → set flag
-3. **30m reminder**: same pattern
+1. **Slot-end normalization**: slots where `ends_at + 10 min grace <= now()` with un-normalized clips → download raw clips → `NormalizeClip` at 720×1280 → upload to S3 → set `clips.normalized_s3_key`
+2. **Deadline detection**: sessions where `status = 'active' AND deadline <= now()` → atomically set `status = 'generating'` → `RPUSH velo:reel_jobs {session_id}`
+3. **2h reminder**: sessions where deadline is within the next 2h window and `reminder_2h_sent = false` → send push → set flag
+4. **30m reminder**: same pattern
 
 **Queue**: Redis LIST — `RPUSH` to enqueue, `BLPOP velo:reel_jobs 5` to dequeue (5s timeout for graceful shutdown). Job durability via PostgreSQL `sessions.status`, not Redis.
 
@@ -423,9 +434,7 @@ The worker process runs a `time.Ticker` every 30 seconds with three queries per 
 **Concurrency:** MVP runs a single worker goroutine processing one reel at a time. On a t3.large
 (2 vCPU), FFmpeg multi-pass saturates the CPU during composition. Concurrent reel generation would
 degrade all reels. If multiple sessions hit deadline simultaneously, they queue and process serially.
-Worst case: 3 sessions × ~3 min each = ~9 min for the last reel (exceeds the 5-min target).
-Acceptable for beta (10–20 users). Post-beta: ECS with dedicated worker tasks enables parallel
-processing.
+The two-phase split reduces deadline-time processing significantly — Phase 2 (scale + stack + concat) is much faster than the full pipeline. Post-beta: ECS with dedicated worker tasks enables parallel processing.
 
 ### 4.8 Push Notifications
 
