@@ -108,7 +108,7 @@ func TestLogout_ExpiredToken(t *testing.T) {
 	assert.Empty(t, bl.blocked)
 }
 
-func TestLogout_BlocklistError(t *testing.T) {
+func TestLogout_BlocklistError_BestEffort(t *testing.T) {
 	manager := auth.NewJWTManager("test-secret", "velo")
 	bl := &mockBlocklist{blocked: map[string]bool{}, err: errors.New("redis down")}
 	h := NewAuthHandler(manager, bl)
@@ -123,5 +123,5 @@ func TestLogout_BlocklistError(t *testing.T) {
 
 	h.Logout(w, req)
 
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Equal(t, http.StatusNoContent, w.Code)
 }

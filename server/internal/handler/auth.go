@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -39,8 +40,10 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.blocklist.Block(r.Context(), claims.JTI, remainingTTL); err != nil {
-		Error(w, domain.NewAppError("INTERNAL_ERROR", "failed to revoke token", http.StatusInternalServerError))
-		return
+		slog.Error("failed to revoke token",
+			slog.String("error", err.Error()),
+			slog.String("jti", claims.JTI),
+		)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

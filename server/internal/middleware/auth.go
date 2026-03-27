@@ -37,13 +37,11 @@ func Auth(manager *auth.JWTManager, blocklist auth.TokenBlocklist) func(http.Han
 
 			blocked, err := blocklist.IsBlocked(r.Context(), claims.JTI)
 			if err != nil {
-				slog.Error("blocklist check failed",
+				slog.Error("blocklist check failed, allowing request",
 					slog.String("error", err.Error()),
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),
 				)
-				handler.Error(w, domain.ErrUnauthorized)
-				return
 			}
 			if blocked {
 				slog.Warn("revoked token used",

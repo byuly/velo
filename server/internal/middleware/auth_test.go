@@ -139,7 +139,7 @@ func TestAuth_RevokedToken(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
-func TestAuth_BlocklistError(t *testing.T) {
+func TestAuth_BlocklistError_FailOpen(t *testing.T) {
 	manager := auth.NewJWTManager("test-secret", "velo")
 	userID := uuid.New()
 	token, err := manager.CreateAccessToken(userID)
@@ -157,5 +157,5 @@ func TestAuth_BlocklistError(t *testing.T) {
 
 	Auth(manager, bl)(next).ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Equal(t, http.StatusOK, w.Code)
 }
