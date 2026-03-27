@@ -22,8 +22,8 @@ func TestLoad_Success(t *testing.T) {
 	if cfg.JWTIssuer != "velo" {
 		t.Fatalf("JWTIssuer = %q, want %q", cfg.JWTIssuer, "velo")
 	}
-	if cfg.JWTSecret != "test-jwt-secret" {
-		t.Fatalf("JWTSecret = %q, want %q", cfg.JWTSecret, "test-jwt-secret")
+	if cfg.JWTSecret != "test-jwt-secret-that-is-32-bytes!" {
+		t.Fatalf("JWTSecret = %q, want %q", cfg.JWTSecret, "test-jwt-secret-that-is-32-bytes!")
 	}
 	if cfg.AppleAppID != "com.example.velo" {
 		t.Fatalf("AppleAppID = %q, want %q", cfg.AppleAppID, "com.example.velo")
@@ -43,12 +43,22 @@ func TestLoad_MissingRequiredEnv(t *testing.T) {
 	}
 }
 
+func TestLoad_JWTSecretTooShort(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("JWT_SECRET", "short")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want JWT_SECRET too short error")
+	}
+}
+
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
 
 	t.Setenv("DATABASE_URL", "postgres://velo:password@localhost:5432/velo?sslmode=disable")
 	t.Setenv("REDIS_ADDR", "localhost:6379")
-	t.Setenv("JWT_SECRET", "test-jwt-secret")
+	t.Setenv("JWT_SECRET", "test-jwt-secret-that-is-32-bytes!")
 	t.Setenv("APPLE_APP_ID", "com.example.velo")
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")

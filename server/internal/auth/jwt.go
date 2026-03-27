@@ -9,12 +9,13 @@ import (
 	"github.com/google/uuid"
 )
 
-const accessTokenTTL = 24 * time.Hour
+// TODO: pair with a refresh token flow for shorter-lived access tokens.
+const accessTokenTTL = 60 * time.Minute
 
 type JWTManager struct {
 	secret []byte
 	issuer string
-	now    func() time.Time //change to time.Now in real code
+	now    func() time.Time
 }
 
 type accessTokenClaims struct {
@@ -35,6 +36,7 @@ func (m *JWTManager) CreateAccessToken(userID uuid.UUID) (string, error) {
 			Subject:   userID.String(),
 			Issuer:    m.issuer,
 			IssuedAt:  jwt.NewNumericDate(m.now()),
+			NotBefore: jwt.NewNumericDate(m.now()),
 			ExpiresAt: jwt.NewNumericDate(m.now().Add(accessTokenTTL)),
 		},
 	}
@@ -77,4 +79,10 @@ func (m *JWTManager) ParseAccessToken(tokenString string) (uuid.UUID, error) {
 	}
 
 	return userID, nil
+}
+
+// SetTimeFunc overrides the time function used for token creation and parsing.
+// This is intended for testing.
+func (m *JWTManager) SetTimeFunc(fn func() time.Time) {
+	m.now = fn
 }
