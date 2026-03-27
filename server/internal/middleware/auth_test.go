@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +14,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type mockBlocklist struct {
+	blocked map[string]bool
+	err     error
+}
+
+func (m *mockBlocklist) Block(_ context.Context, jti string, _ time.Duration) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.blocked[jti] = true
+	return nil
+}
+
+func (m *mockBlocklist) IsBlocked(_ context.Context, jti string) (bool, error) {
+	if m.err != nil {
+		return false, m.err
+	}
+	return m.blocked[jti], nil
+}
+
+func newMockBlocklist() *mockBlocklist {
+	return &mockBlocklist{blocked: map[string]bool{}}
+}
 
 func TestAuth_ValidToken(t *testing.T) {
 	manager := auth.NewJWTManager("test-secret", "velo")
@@ -29,7 +55,7 @@ func TestAuth_ValidToken(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 
-	Auth(manager)(next).ServeHTTP(w, req)
+	Auth(manager, newMockBlocklist())(next).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, userID, gotUserID)
@@ -44,7 +70,7 @@ func TestAuth_MissingToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 
-	Auth(manager)(next).ServeHTTP(w, req)
+	Auth(manager, newMockBlocklist())(next).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
@@ -59,7 +85,7 @@ func TestAuth_InvalidToken(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer invalid-token")
 	w := httptest.NewRecorder()
 
-	Auth(manager)(next).ServeHTTP(w, req)
+	Auth(manager, newMockBlocklist())(next).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
@@ -83,7 +109,53 @@ func TestAuth_ExpiredToken(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 
-	Auth(manager)(next).ServeHTTP(w, req)
+	Auth(manager, newMockBlocklist())(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestAuth_RevokedToken(t *testing.T) {
+	manager := auth.NewJWTManager("test-secret", "velo")
+	userID := uuid.New()
+	token, err := manager.CreateAccessToken(userID)
+	require.NoError(t, err)
+
+	claims, err := manager.ParseAccessToken(token)
+	require.NoError(t, err)
+
+	bl := newMockBlocklist()
+	bl.blocked[claims.JTI] = true
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+
+	Auth(manager, bl)(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestAuth_BlocklistError(t *testing.T) {
+	manager := auth.NewJWTManager("test-secret", "velo")
+	userID := uuid.New()
+	token, err := manager.CreateAccessToken(userID)
+	require.NoError(t, err)
+
+	bl := &mockBlocklist{blocked: map[string]bool{}, err: errors.New("redis down")}
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+
+	Auth(manager, bl)(next).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
