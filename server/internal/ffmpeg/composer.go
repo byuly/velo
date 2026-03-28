@@ -10,20 +10,12 @@ import (
 	"strings"
 )
 
-// escapeDrawtext escapes characters that have special meaning in FFmpeg filter
-// option strings (colon, backslash, single-quote) when used inside drawtext.
-func escapeDrawtext(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `'`, `\'`)
-	s = strings.ReplaceAll(s, `:`, `\:`)
-	return s
-}
-
 // PanelDims holds the target width/height for a single participant panel.
 type PanelDims struct{ Width, Height int }
 
 // PanelDimsFor returns the correct panel dimensions for the given participant count.
 // 1→720×1280  2→720×640  3→720×427  4→360×640
+// Panics on n <= 0 (logic error) or n > 4 (unsupported layout).
 func PanelDimsFor(n int) PanelDims {
 	switch n {
 	case 1:
@@ -35,14 +27,14 @@ func PanelDimsFor(n int) PanelDims {
 	case 4:
 		return PanelDims{360, 640}
 	default:
-		return PanelDims{720, 640}
+		panic(fmt.Sprintf("PanelDimsFor: unsupported participant count %d (must be 1-4)", n))
 	}
 }
 
 // PanelInput is one pre-processed panel file feeding into StackPanels.
+// All panels must contain an audio track (real or silent AAC).
 type PanelInput struct {
-	Path     string // path to processed .mp4
-	HasAudio bool   // false for black panels
+	Path string // path to processed .mp4
 }
 
 // Composer wraps the ffmpeg and ffprobe binaries.
@@ -86,9 +78,10 @@ func (c *Composer) NormalizeClip(ctx context.Context, input, output string) erro
 	)
 }
 
-// ScaleClip scales a pre-normalized clip to the target panel dimensions.
-// Audio is stream-copied without re-encoding. This is Phase 2 of the
-// two-phase pipeline (fast, runs at deadline when participant count is known).
+// ScaleClip scales a pre-normalized clip to the target panel dimensions with a
+// lightweight re-encode (input is already CRF 23 from Phase 1). Audio is
+// stream-copied. This is Phase 2 of the two-phase pipeline (runs at deadline
+// when participant count is known).
 func (c *Composer) ScaleClip(ctx context.Context, input, output string, dims PanelDims) error {
 	vf := fmt.Sprintf("scale=%d:%d", dims.Width, dims.Height)
 	return c.run(ctx,
@@ -135,7 +128,7 @@ func (c *Composer) StackPanels(ctx context.Context, output string,
 		args = append(args, "-i", p.Path)
 	}
 
-	filterComplex, videoLabel, audioLabel := buildFilterGraph(panels, audioIdx)
+	filterComplex, videoLabel, audioLabel := buildFilterGraph(len(panels), audioIdx)
 	args = append(args,
 		"-filter_complex", filterComplex,
 		"-map", videoLabel,
@@ -162,7 +155,8 @@ func (c *Composer) ConcatSections(ctx context.Context, output string, sections [
 	defer os.Remove(listFile.Name())
 
 	for _, s := range sections {
-		fmt.Fprintf(listFile, "file '%s'\n", s)
+		escaped := strings.ReplaceAll(s, "'", "'\\''")
+		fmt.Fprintf(listFile, "file '%s'\n", escaped)
 	}
 	if err := listFile.Close(); err != nil {
 		return fmt.Errorf("close concat list: %w", err)
@@ -179,9 +173,9 @@ func (c *Composer) ConcatSections(ctx context.Context, output string, sections [
 }
 
 // buildFilterGraph constructs the -filter_complex string and output map labels.
+// n is the number of input panels; audioIdx selects the audio source.
 // Returns (filterComplex, videoLabel, audioLabel).
-func buildFilterGraph(panels []PanelInput, audioIdx int) (string, string, string) {
-	n := len(panels)
+func buildFilterGraph(n, audioIdx int) (string, string, string) {
 	switch n {
 	case 1:
 		return "[0:v]null[v];[0:a]anull[a]", "[v]", "[a]"
@@ -208,9 +202,9 @@ func buildFilterGraph(panels []PanelInput, audioIdx int) (string, string, string
 		return filter, "[v]", "[a]"
 
 	default:
-		// Fallback: vstack all panels, use first audio.
+		// Fallback: vstack all panels.
 		var vInputs strings.Builder
-		for i := range panels {
+		for i := range n {
 			fmt.Fprintf(&vInputs, "[%d:v]", i)
 		}
 		filter := fmt.Sprintf(
@@ -279,7 +273,11 @@ func (c *Composer) run(ctx context.Context, args ...string) error {
 	cmd.Stderr = &combined
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ffmpeg %s failed: %w\n%s", args[0], err, combined.String())
+		preview := strings.Join(args, " ")
+		if len(preview) > 120 {
+			preview = preview[:120] + "..."
+		}
+		return fmt.Errorf("ffmpeg [%s] failed: %w\n%s", preview, err, combined.String())
 	}
 	return nil
 }

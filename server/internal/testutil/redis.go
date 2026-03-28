@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ var (
 	redisOnce sync.Once
 	redisAddr string
 	redisErr  error
+	redisDB   atomic.Int32 // incremented per test for isolation
 )
 
 func startRedisContainer() (string, error) {
@@ -42,7 +44,8 @@ func startRedisContainer() (string, error) {
 }
 
 // SetupTestRedis returns a Redis client connected to a shared test container.
-// The database is flushed on test cleanup to isolate tests.
+// Each call selects a unique Redis DB number (0-15) so tests are isolated
+// without relying on FlushDB, making it safe for parallel use.
 // Skips the test if Docker is not available.
 func SetupTestRedis(t *testing.T) *redis.Client {
 	t.Helper()
@@ -58,7 +61,8 @@ func SetupTestRedis(t *testing.T) *redis.Client {
 		t.Fatalf("redis container: %v", redisErr)
 	}
 
-	client := redis.NewClient(&redis.Options{Addr: redisAddr})
+	db := int(redisDB.Add(1))
+	client := redis.NewClient(&redis.Options{Addr: redisAddr, DB: db})
 
 	t.Cleanup(func() {
 		client.FlushDB(context.Background())

@@ -7,6 +7,11 @@ import (
 	"path/filepath"
 )
 
+// paddingToleranceSec is the minimum gap (in seconds) between a panel's actual
+// duration and the section duration before black-panel padding is appended.
+// Avoids generating sub-frame padding for negligible rounding differences.
+const paddingToleranceSec = 0.1
+
 // ComposeRequest describes the inputs for a reel composition.
 // All clip paths must point to pre-normalized files on local disk.
 // WorkDir is a job-scoped temp directory; the caller owns its lifecycle.
@@ -61,7 +66,7 @@ func (e *Engine) Compose(ctx context.Context, req ComposeRequest) (string, error
 			if err != nil {
 				return "", fmt.Errorf("section %d participant %d: %w", sIdx, pIdx, err)
 			}
-			panels = append(panels, PanelInput{Path: panelPath, HasAudio: true})
+			panels = append(panels, PanelInput{Path: panelPath})
 		}
 
 		sectionFile := filepath.Join(req.WorkDir, fmt.Sprintf("section_%d.mp4", sIdx))
@@ -133,7 +138,7 @@ func (e *Engine) buildParticipantPanel(
 		return "", fmt.Errorf("probe panel: %w", err)
 	}
 
-	if pr.Duration+0.1 < p.Duration {
+	if pr.Duration+paddingToleranceSec < p.Duration {
 		remainder := p.Duration - pr.Duration
 		blackPad := filepath.Join(workDir, prefix+"_pad.mp4")
 		if err := e.composer.GenerateBlackPanel(ctx, blackPad, dims, remainder, p.Name); err != nil {

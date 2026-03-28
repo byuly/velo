@@ -530,7 +530,7 @@ dims := PanelDimsFor(len(finalParticipants))
 For each section (slot), for each participant:
   1. Download pre-normalized clips (clips.normalized_s3_key)
        → If normalized_s3_key is NULL (late arrival): normalize inline as fallback
-  2. ScaleClip(path, dims)            ← fast, scale-only pass, no re-encode
+  2. ScaleClip(path, dims)            ← fast, lightweight re-encode (input already CRF 23)
   3. ConcatClips(scaledClips)         ← concat participant's clips for this section
   4. Pad remainder with GenerateBlackPanel(dims, remainingDuration, displayName)
 
@@ -548,7 +548,7 @@ Final:
 
 **NormalizeClip split:** The current `NormalizeClip(path, dims, timestamp)` combines VFR fix + scale. The two-phase design requires:
 - `NormalizeClip(path, timestamp)` — VFR→CFR + CRF 23 at original resolution, audio preserved (Phase 1)
-- `ScaleClip(path, dims)` — scale-only pass, no re-encode (Phase 2)
+- `ScaleClip(path, dims)` — lightweight re-encode (input already CRF 23) (Phase 2)
 
 Implementation detail for the task; the intent is documented here.
 

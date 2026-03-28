@@ -347,7 +347,7 @@ func TestStackPanels_1(t *testing.T) {
 	panel := makePanel(t, ctx, c, clipGreen5s, dims, filepath.Join(t.TempDir(), "p0.mp4"))
 
 	out := filepath.Join(t.TempDir(), "stack1.mp4")
-	panels := []PanelInput{{Path: panel, HasAudio: true}}
+	panels := []PanelInput{{Path: panel}}
 	require.NoError(t, c.StackPanels(ctx, out, panels, 0))
 
 	ps := probe(t, out)
@@ -370,8 +370,8 @@ func TestStackPanels_2(t *testing.T) {
 
 	out := filepath.Join(tmp, "stack2.mp4")
 	panels := []PanelInput{
-		{Path: p1, HasAudio: true},
-		{Path: p2, HasAudio: true},
+		{Path: p1},
+		{Path: p2},
 	}
 	require.NoError(t, c.StackPanels(ctx, out, panels, 0))
 
@@ -396,7 +396,7 @@ func TestStackPanels_4(t *testing.T) {
 	srcs := []string{clipRed10s, clipBlue8s, clipGreen5s, clipRed10s}
 	for i, src := range srcs {
 		p := makePanel(t, ctx, c, src, dims, filepath.Join(tmp, fmt.Sprintf("p%d.mp4", i)))
-		panels[i] = PanelInput{Path: p, HasAudio: true}
+		panels[i] = PanelInput{Path: p}
 	}
 
 	out := filepath.Join(tmp, "stack4.mp4")
@@ -423,8 +423,8 @@ func TestStackPanels_AudioRotation(t *testing.T) {
 
 	out := filepath.Join(tmp, "stack_audio1.mp4")
 	panels := []PanelInput{
-		{Path: p0, HasAudio: true},
-		{Path: p1, HasAudio: true},
+		{Path: p0},
+		{Path: p1},
 	}
 	// audioIdx=1 → use panel 1's audio
 	require.NoError(t, c.StackPanels(ctx, out, panels, 1))
