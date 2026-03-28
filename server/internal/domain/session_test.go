@@ -70,3 +70,34 @@ func TestSession_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestSlotParticipation_Validate(t *testing.T) {
+	ptr := func(s string) *string { return &s }
+
+	tests := []struct {
+		name    string
+		title   *string
+		wantErr string
+	}{
+		{"nil title", nil, ""},
+		{"empty title", ptr(""), ""},
+		{"30 char title", ptr(strings.Repeat("a", 30)), ""},
+		{"31 char title", ptr(strings.Repeat("a", 31)), "at most 30"},
+		{"30 rune unicode", ptr(strings.Repeat("한", 30)), ""},
+		{"31 rune unicode", ptr(strings.Repeat("한", 31)), "at most 30"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sp := &SlotParticipation{Title: tc.title}
+			err := sp.Validate()
+
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			}
+		})
+	}
+}

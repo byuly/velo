@@ -38,6 +38,19 @@ func requireFFmpeg(t *testing.T) {
 	}
 }
 
+// requireDrawtext skips the test if the drawtext filter is not available.
+func requireDrawtext(t *testing.T) {
+	t.Helper()
+	requireFFmpeg(t)
+	c, err := New()
+	if err != nil {
+		t.Skip("ffmpeg not available")
+	}
+	if !c.HasDrawtext() {
+		t.Skip("ffmpeg drawtext filter not available — skipping")
+	}
+}
+
 // TestMain generates synthetic fixture clips once and runs all tests.
 func TestMain(m *testing.M) {
 	// If ffmpeg is absent, tests will be skipped individually via requireFFmpeg.
@@ -457,6 +470,117 @@ func TestConcatSections(t *testing.T) {
 	expected := d1 + d2
 	require.True(t, math.Abs(total-expected) < 1.0,
 		"concat duration %.2f should be close to %.2f", total, expected)
+}
+
+// ─── escapeDrawtext + titleFontSize ──────────────────────────────────────────
+
+func TestEscapeDrawtext(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"sleeping", "sleeping"},
+		{"10:30 AM", `10\:30 AM`},
+		{`a\b`, `a\\b`},
+		{"it's", `it\'s`},
+		{`it's 10:30\n`, `it\'s 10\:30\\n`},
+	}
+	for _, tc := range tests {
+		got := escapeDrawtext(tc.in)
+		require.Equal(t, tc.want, got, "escapeDrawtext(%q)", tc.in)
+	}
+}
+
+func TestTitleFontSize(t *testing.T) {
+	tests := []struct {
+		dims PanelDims
+		want int
+	}{
+		{PanelDims{720, 1280}, 64},
+		{PanelDims{720, 640}, 32},
+		{PanelDims{720, 427}, 21},
+		{PanelDims{360, 640}, 32},
+		{PanelDims{100, 200}, 18}, // clamped minimum
+	}
+	for _, tc := range tests {
+		got := titleFontSize(tc.dims)
+		require.Equal(t, tc.want, got, "titleFontSize(%v)", tc.dims)
+	}
+}
+
+// ─── OverlayTitle ────────────────────────────────────────────────────────────
+
+func TestOverlayTitle_EmptyTitle(t *testing.T) {
+	requireFFmpeg(t)
+	ctx := context.Background()
+	c, err := New()
+	require.NoError(t, err)
+
+	tmp := t.TempDir()
+	panel := makePanel(t, ctx, c, clipGreen5s, PanelDimsFor(2), filepath.Join(tmp, "p.mp4"))
+
+	out := filepath.Join(tmp, "titled.mp4")
+	require.NoError(t, c.OverlayTitle(ctx, panel, out, "", PanelDimsFor(2)))
+
+	// Empty title → symlink, not re-encode.
+	target, err := os.Readlink(out)
+	require.NoError(t, err)
+	require.Equal(t, panel, target)
+}
+
+func TestOverlayTitle_NoDrawtext(t *testing.T) {
+	requireFFmpeg(t)
+	ctx := context.Background()
+
+	c := NewWithBin("ffmpeg", "ffprobe") // hasDrawtext=false by default
+
+	tmp := t.TempDir()
+	panel := makePanel(t, ctx, c, clipGreen5s, PanelDimsFor(2), filepath.Join(tmp, "p.mp4"))
+
+	out := filepath.Join(tmp, "titled.mp4")
+	require.NoError(t, c.OverlayTitle(ctx, panel, out, "sleeping", PanelDimsFor(2)))
+
+	// Without drawtext → symlink fallback.
+	target, err := os.Readlink(out)
+	require.NoError(t, err)
+	require.Equal(t, panel, target)
+}
+
+func TestOverlayTitle_WithDrawtext(t *testing.T) {
+	requireDrawtext(t)
+	ctx := context.Background()
+	c, err := New()
+	require.NoError(t, err)
+
+	tmp := t.TempDir()
+	dims := PanelDimsFor(2)
+	panel := makePanel(t, ctx, c, clipGreen5s, dims, filepath.Join(tmp, "p.mp4"))
+
+	out := filepath.Join(tmp, "titled.mp4")
+	require.NoError(t, c.OverlayTitle(ctx, panel, out, "sleeping", dims))
+
+	ps := probe(t, out)
+	vs := videoStream(t, ps)
+	require.Equal(t, dims.Width, vs.Width)
+	require.Equal(t, dims.Height, vs.Height)
+	require.True(t, hasAudioStream(ps), "audio must be preserved")
+}
+
+func TestOverlayTitle_SpecialChars(t *testing.T) {
+	requireDrawtext(t)
+	ctx := context.Background()
+	c, err := New()
+	require.NoError(t, err)
+
+	tmp := t.TempDir()
+	dims := PanelDimsFor(2)
+	panel := makePanel(t, ctx, c, clipGreen5s, dims, filepath.Join(tmp, "p.mp4"))
+
+	out := filepath.Join(tmp, "titled.mp4")
+	require.NoError(t, c.OverlayTitle(ctx, panel, out, "it's 10:30", dims))
+
+	ps := probe(t, out)
+	vs := videoStream(t, ps)
+	require.Equal(t, dims.Width, vs.Width)
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

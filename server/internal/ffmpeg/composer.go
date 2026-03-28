@@ -5,10 +5,35 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+// escapeDrawtext escapes characters that have special meaning in FFmpeg
+// drawtext filter option strings: backslash, single-quote, colon.
+// Backslash must be escaped first to avoid double-escaping.
+func escapeDrawtext(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `'`, `\'`)
+	s = strings.ReplaceAll(s, `:`, `\:`)
+	return s
+}
+
+// titleFontSize returns a font size appropriate for the given panel dimensions.
+// Targets roughly 5% of panel height, clamped to [18, 64].
+func titleFontSize(dims PanelDims) int {
+	fs := dims.Height / 20
+	if fs < 18 {
+		fs = 18
+	}
+	if fs > 64 {
+		fs = 64
+	}
+	return fs
+}
 
 // PanelDims holds the target width/height for a single participant panel.
 type PanelDims struct{ Width, Height int }
@@ -39,8 +64,9 @@ type PanelInput struct {
 
 // Composer wraps the ffmpeg and ffprobe binaries.
 type Composer struct {
-	ffmpegBin  string
-	ffprobeBin string
+	ffmpegBin   string
+	ffprobeBin  string
+	hasDrawtext bool
 }
 
 // New creates a Composer using ffmpeg/ffprobe found in PATH.
@@ -53,12 +79,37 @@ func New() (*Composer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe not found in PATH: %w", err)
 	}
-	return &Composer{ffmpegBin: ffmpeg, ffprobeBin: ffprobe}, nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	hasDT := probeDrawtext(ctx, ffmpeg)
+	if !hasDT {
+		slog.Warn("ffmpeg drawtext filter unavailable — title overlays will be skipped (install ffmpeg with libfreetype)")
+	}
+
+	return &Composer{ffmpegBin: ffmpeg, ffprobeBin: ffprobe, hasDrawtext: hasDT}, nil
 }
 
 // NewWithBin creates a Composer with explicit binary paths (for tests).
+// Drawtext is disabled by default; use SetDrawtext to enable.
 func NewWithBin(ffmpeg, ffprobe string) *Composer {
 	return &Composer{ffmpegBin: ffmpeg, ffprobeBin: ffprobe}
+}
+
+// SetDrawtext enables or disables drawtext support (for tests).
+func (c *Composer) SetDrawtext(enabled bool) { c.hasDrawtext = enabled }
+
+// HasDrawtext reports whether the drawtext filter is available.
+func (c *Composer) HasDrawtext() bool { return c.hasDrawtext }
+
+// probeDrawtext returns true if the ffmpeg binary supports the drawtext filter.
+func probeDrawtext(ctx context.Context, ffmpegBin string) bool {
+	cmd := exec.CommandContext(ctx, ffmpegBin, "-filters")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "drawtext")
 }
 
 // NormalizeClip normalizes VFR→CFR at 30fps at the original resolution.
@@ -168,6 +219,34 @@ func (c *Composer) ConcatSections(ctx context.Context, output string, sections [
 		"-safe", "0",
 		"-i", listFile.Name(),
 		"-c", "copy",
+		output,
+	)
+}
+
+// OverlayTitle burns a centered title onto a video clip using drawtext.
+// If drawtext is unavailable or title is empty, the input is symlinked to
+// the output path (no-op) to keep the pipeline uniform.
+func (c *Composer) OverlayTitle(ctx context.Context, input, output, title string, dims PanelDims) error {
+	if !c.hasDrawtext || title == "" {
+		return os.Symlink(input, output)
+	}
+
+	escaped := escapeDrawtext(title)
+	fontSize := titleFontSize(dims)
+
+	vf := fmt.Sprintf(
+		"drawtext=text='%s':fontcolor=white:fontsize=%d:x=(w-text_w)/2:y=(h-text_h)/2:box=1:boxcolor=black@0.5:boxborderw=8",
+		escaped, fontSize,
+	)
+
+	return c.run(ctx,
+		"-y",
+		"-i", input,
+		"-vf", vf,
+		"-c:v", "libx264",
+		"-preset", "fast",
+		"-crf", "23",
+		"-c:a", "copy",
 		output,
 	)
 }

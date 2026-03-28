@@ -30,6 +30,7 @@ type SectionRequest struct {
 type ParticipantPanel struct {
 	LocalPaths []string // pre-normalized clip files on disk
 	Name       string   // display name (for black panel overlay, future)
+	Title      string   // per-participant section title (e.g. "sleeping"); empty = no overlay
 	Duration   float64  // section max duration in seconds
 }
 
@@ -108,6 +109,13 @@ func (e *Engine) buildParticipantPanel(
 		if err := e.composer.GenerateBlackPanel(ctx, out, dims, p.Duration, p.Name); err != nil {
 			return "", fmt.Errorf("generate black panel: %w", err)
 		}
+		if p.Title != "" {
+			titled := filepath.Join(workDir, prefix+"_black_titled.mp4")
+			if err := e.composer.OverlayTitle(ctx, out, titled, p.Title, dims); err != nil {
+				return "", fmt.Errorf("overlay title on black panel: %w", err)
+			}
+			out = titled
+		}
 		return out, nil
 	}
 
@@ -149,6 +157,15 @@ func (e *Engine) buildParticipantPanel(
 			return "", fmt.Errorf("concat padding: %w", err)
 		}
 		panelPath = padded
+	}
+
+	// Apply title overlay as the final step of panel construction.
+	if p.Title != "" {
+		titled := filepath.Join(workDir, prefix+"_titled.mp4")
+		if err := e.composer.OverlayTitle(ctx, panelPath, titled, p.Title, dims); err != nil {
+			return "", fmt.Errorf("overlay title: %w", err)
+		}
+		panelPath = titled
 	}
 
 	return panelPath, nil
