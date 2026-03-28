@@ -39,9 +39,10 @@ const (
 )
 
 const (
-	MaxSessionNameLength = 40
-	MaxParticipants      = 4
-	MinDeadlineOffset    = 1 * time.Hour
+	MaxSessionNameLength              = 40
+	MaxSlotParticipationTitleLength   = 30
+	MaxParticipants                   = 4
+	MinDeadlineOffset                 = 1 * time.Hour
 )
 
 var ValidSectionDurations = map[int]bool{10: true, 15: true, 20: true, 30: true}
@@ -79,6 +80,14 @@ type SlotParticipation struct {
 	SlotID uuid.UUID               `json:"slot_id"`
 	UserID uuid.UUID               `json:"user_id"`
 	Status SlotParticipationStatus `json:"status"`
+	Title  *string                 `json:"title,omitempty"`
+}
+
+func (sp *SlotParticipation) Validate() error {
+	if sp.Title != nil && utf8.RuneCountInString(*sp.Title) > MaxSlotParticipationTitleLength {
+		return ValidationErrorf("title must be at most %d characters", MaxSlotParticipationTitleLength)
+	}
+	return nil
 }
 
 func (s *Session) Validate() error {
