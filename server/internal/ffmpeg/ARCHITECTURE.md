@@ -15,9 +15,11 @@ classDiagram
     class Composer {
         -ffmpegBin string
         -ffprobeBin string
+        -hasDrawtext bool
         +NormalizeClip(ctx, input, output) error
         +ScaleClip(ctx, input, output, PanelDims) error
         +GenerateBlackPanel(ctx, output, PanelDims, duration, name) error
+        +OverlayTitle(ctx, input, output, title, PanelDims) error
         +StackPanels(ctx, output, []PanelInput, audioIdx) error
         +ConcatSections(ctx, output, []string) error
         +Probe(ctx, path) (ProbeResult, error)
@@ -37,6 +39,7 @@ classDiagram
     class ParticipantPanel {
         +LocalPaths []string
         +Name string
+        +Title string
         +Duration float64
     }
 
@@ -91,7 +94,12 @@ flowchart TD
     M --> N
     F --> N
 
-    N --> O[Collect all panels for section]
+    N --> N2{Has title?}
+    N2 -- Yes --> N3["OverlayTitle(centered text)"]
+    N2 -- No --> O
+    N3 --> O
+
+    O[Collect all panels for section]
     O --> P["StackPanels(panels, audioIdx)"]
     P --> Q[section_N.mp4]
 
@@ -130,7 +138,7 @@ sequenceDiagram
     Scheduler->>S3: Download pre-normalized clips
     S3-->>Scheduler: normalized clips on local disk
     Scheduler->>Engine: Compose(ComposeRequest)
-    note right of Engine: ScaleClip → Concat → Pad<br/>→ StackPanels → ConcatSections
+    note right of Engine: ScaleClip → Concat → Pad<br/>→ OverlayTitle → StackPanels<br/>→ ConcatSections
     Engine-->>Scheduler: reel.mp4
     Scheduler->>S3: Upload final reel
     end
@@ -167,6 +175,7 @@ Layout: single       Layout: vstack       Layout: vstack×3     Layout: 2×2 gri
 | `NormalizeClip` | `ffmpeg -i input -vf fps=30 -c:v libx264 -crf 23 -c:a aac` | VFR→CFR, preserves audio | 1 |
 | `ScaleClip` | `ffmpeg -i input -vf scale=W:H -c:v libx264 -crf 23 -c:a copy` | Re-encode video, copy audio | 2 |
 | `GenerateBlackPanel` | `ffmpeg -f lavfi -i color=black -f lavfi -i anullsrc -t D` | Synthetic sources | 2 |
+| `OverlayTitle` | `ffmpeg -i input -vf "drawtext=text='...':x=(w-text_w)/2:y=(h-text_h)/2"` | Requires libfreetype; symlinks on fallback | 2 |
 | `StackPanels` | `ffmpeg -i p0 -i p1 ... -filter_complex "vstack\|hstack"` | `buildFilterGraph(n, audioIdx)` | 2 |
 | `ConcatSections` | `ffmpeg -f concat -safe 0 -i list.txt -c copy` | Lossless concat | 2 |
 | `Probe` | `ffprobe -print_format json -show_streams` | Duration, dims, audio detect | both |
