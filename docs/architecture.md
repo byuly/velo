@@ -382,7 +382,7 @@ Normalized clips uploaded to S3 (`normalized/{sessionID}/{clipID}.mp4`). The `cl
 Triggered when session deadline passes. Downloads pre-normalized clips (~1–2 Mbps each, already re-encoded).
 
 ```bash
-# Scale-only pass — fast, no re-encode
+# Scale pass — lightweight re-encode (input already CRF 23 from Phase 1)
 ffmpeg -y -i normalized.mp4 \
   -vf "scale=720:640" \
   -c:v libx264 -preset fast -crf 23 \
