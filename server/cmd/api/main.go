@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/byuly/velo/server/internal/auth"
 	"github.com/byuly/velo/server/internal/config"
+	apphandler "github.com/byuly/velo/server/internal/handler"
 	mw "github.com/byuly/velo/server/internal/middleware"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -48,6 +50,10 @@ func main() {
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
 	defer rdb.Close()
 
+	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTIssuer)
+	blocklist := auth.NewRedisBlocklist(rdb)
+	authHandler := apphandler.NewAuthHandler(jwtManager, blocklist)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -74,6 +80,11 @@ func main() {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	r.Route("/auth", func(r chi.Router) {
+		r.Use(mw.Auth(jwtManager, blocklist))
+		r.Post("/logout", authHandler.Logout)
 	})
 
 	srv := &http.Server{

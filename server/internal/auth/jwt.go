@@ -30,9 +30,17 @@ func NewJWTManager(secret, issuer string) *JWTManager {
 	}
 }
 
+// AccessTokenClaims holds the parsed fields from a validated access token.
+type AccessTokenClaims struct {
+	UserID    uuid.UUID
+	JTI       string
+	ExpiresAt time.Time
+}
+
 func (m *JWTManager) CreateAccessToken(userID uuid.UUID) (string, error) {
 	claims := accessTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
 			Subject:   userID.String(),
 			Issuer:    m.issuer,
 			IssuedAt:  jwt.NewNumericDate(m.now()),
@@ -51,7 +59,7 @@ func (m *JWTManager) CreateAccessToken(userID uuid.UUID) (string, error) {
 	return signed, nil
 }
 
-func (m *JWTManager) ParseAccessToken(tokenString string) (uuid.UUID, error) {
+func (m *JWTManager) ParseAccessToken(tokenString string) (AccessTokenClaims, error) {
 	parser := jwt.NewParser(
 		jwt.WithTimeFunc(m.now),
 		jwt.WithIssuer(m.issuer),
@@ -65,20 +73,28 @@ func (m *JWTManager) ParseAccessToken(tokenString string) (uuid.UUID, error) {
 		return m.secret, nil
 	})
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("parse access token: %w", err)
+		return AccessTokenClaims{}, fmt.Errorf("parse access token: %w", err)
 	}
 
 	claims, ok := token.Claims.(*accessTokenClaims)
 	if !ok || !token.Valid {
-		return uuid.Nil, errors.New("invalid access token claims")
+		return AccessTokenClaims{}, errors.New("invalid access token claims")
+	}
+
+	if claims.ID == "" {
+		return AccessTokenClaims{}, errors.New("missing jti claim")
 	}
 
 	userID, err := uuid.Parse(claims.Subject)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("parse subject uuid: %w", err)
+		return AccessTokenClaims{}, fmt.Errorf("parse subject uuid: %w", err)
 	}
 
-	return userID, nil
+	return AccessTokenClaims{
+		UserID:    userID,
+		JTI:       claims.ID,
+		ExpiresAt: claims.ExpiresAt.Time,
+	}, nil
 }
 
 // SetTimeFunc overrides the time function used for token creation and parsing.
