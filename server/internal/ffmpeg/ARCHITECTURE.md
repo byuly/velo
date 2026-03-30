@@ -124,11 +124,11 @@ sequenceDiagram
     participant Engine
 
     rect rgb(230, 245, 255)
-    note over Scheduler,Composer: Phase 1 — Slot-end normalization (eager)
+    note over Scheduler,Composer: Phase 1 — Slot-end normalization (eager) — DEFERRED, not yet implemented
     Scheduler->>S3: Download raw clip
     S3-->>Scheduler: raw_clip.mov
     Scheduler->>Composer: NormalizeClip(raw, normalized)
-    note right of Composer: VFR→CFR 30fps, CRF 23<br/>Original resolution, audio preserved
+    note right of Composer: VFR→CFR 30fps, CRF 23<br/>Original resolution, audio preserved<br/>(currently runs inline in Phase 2 instead)
     Composer-->>Scheduler: normalized.mp4
     Scheduler->>S3: Upload normalized clip
     end

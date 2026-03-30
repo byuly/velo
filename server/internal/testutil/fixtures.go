@@ -237,6 +237,39 @@ func CreateClip(t *testing.T, pool *pgxpool.Pool, sessionID, userID uuid.UUID, o
 	return c
 }
 
+// --- SlotParticipation ---
+
+type SlotParticipationOverrides struct {
+	Status *domain.SlotParticipationStatus
+	Title  **string
+}
+
+func CreateSlotParticipation(t *testing.T, pool *pgxpool.Pool, slotID, userID uuid.UUID, overrides *SlotParticipationOverrides) domain.SlotParticipation {
+	t.Helper()
+
+	status := domain.SlotParticipationStatusRecording
+	var title *string
+
+	if overrides != nil {
+		status = coalesce(overrides.Status, status)
+		if overrides.Title != nil {
+			title = *overrides.Title
+		}
+	}
+
+	var sp domain.SlotParticipation
+	err := pool.QueryRow(context.Background(),
+		`INSERT INTO slot_participations (slot_id, user_id, status, title)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id, slot_id, user_id, status, title`,
+		slotID, userID, status, title,
+	).Scan(&sp.ID, &sp.SlotID, &sp.UserID, &sp.Status, &sp.Title)
+	if err != nil {
+		t.Fatalf("create slot participation: %v", err)
+	}
+	return sp
+}
+
 // --- RefreshToken ---
 
 type RefreshTokenOverrides struct {

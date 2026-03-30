@@ -131,7 +131,7 @@ iOS                         Go API                      Apple Servers
  │◄─ { access_token } ────────┤                              │
 ```
 
-- **Access token**: JWT, 24h expiry, contains `user_id` and `exp`
+- **Access token**: JWT, 60-min expiry, contains `user_id`, `exp`, and `jti` (unique token ID for revocation). TTL shortened from original 24h design; will re-evaluate once refresh flow is complete end-to-end.
 - **Refresh token**: opaque UUID, 90-day expiry, stored in `refresh_tokens` table (SHA-256 hashed)
 - iOS stores both in Keychain
 - `APIClient` intercepts 401 → auto-refreshes → retries original request once
@@ -149,6 +149,7 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 |----------|--------|------|-------------|----------|
 | `/auth/apple` | POST | No | `{ identity_token }` | `{ access_token, refresh_token, user }` |
 | `/auth/refresh` | POST | No | `{ refresh_token }` | `{ access_token }` |
+| `/auth/logout` | POST | Yes | — | `204 No Content` (blocks token JTI in Redis) |
 | `/users/me` | GET | Yes | — | `{ user }` |
 | `/users/me` | PATCH | Yes | `{ display_name?, avatar_url? }` | `{ user }` |
 | `/users/me` | DELETE | Yes | — | `204 No Content` |
@@ -218,6 +219,7 @@ All endpoints return JSON. Authenticated endpoints require `Authorization: Beare
 | `slot_id` | UUID FK | References session_slots |
 | `user_id` | UUID FK | References users |
 | `status` | ENUM | `recording` / `skipped` |
+| `title` | TEXT | Optional per-participant section caption (max 30 chars); rendered as a centered overlay in the reel panel |
 
 **session_participants**
 
@@ -350,6 +352,8 @@ Output: ordered section list (with panels per section) → FFmpeg
 
 > Full design in `docs/ffmpeg-spike.md` Section 8.6. This section summarizes the architecture.
 
+> **MVP status:** Phase 1 (slot-end normalization) is **not yet implemented**. The `clips.normalized_s3_key` column does not exist in the schema. Currently all normalization happens inline during Phase 2 at deadline. This increases deadline-to-reel latency — acceptable for small beta groups but should be addressed before production load. The Phase 1 design below is the target architecture.
+
 Processing is split into two phases to minimize deadline-to-reel latency. The expensive codec re-encode runs eagerly as slots close; the layout-dependent work runs at deadline when final participant count is known.
 
 Panel dimensions by participant count:
@@ -420,16 +424,20 @@ The spike's `NormalizeClip(path, dims, timestamp)` combines VFR fix + scale. The
 
 ### 4.7 Job Queue & Scheduler
 
+> **MVP status:** The scheduler currently runs inside the **API process** (`cmd/api/main.go`), not in a separate worker. `cmd/worker/main.go` is a skeleton. This is a known deviation — FFmpeg is CPU-bound on a t3.large and will compete with HTTP request handling during reel generation. Must be separated before production load. The worker-process design below is the target architecture.
+>
+> The `internal/queue/` Redis LIST implementation is complete but intentionally bypassed for MVP: the scheduler calls `reel.Service.Generate()` inline rather than enqueuing. Durability is provided by `sessions.status` in Postgres (not Redis). The queue will be wired in when the scheduler moves to the worker process.
+
 The worker process runs a `time.Ticker` every 30 seconds with four queries per tick:
 
-1. **Slot-end normalization**: slots where `ends_at + 10 min grace <= now()` with un-normalized clips → download raw clips → `NormalizeClip` at 720×1280 → upload to S3 → set `clips.normalized_s3_key`
+1. **Slot-end normalization**: slots where `ends_at + 10 min grace <= now()` with un-normalized clips → download raw clips → `NormalizeClip` at 720×1280 → upload to S3 → set `clips.normalized_s3_key` *(deferred — see §4.6 note)*
 2. **Deadline detection**: sessions where `status = 'active' AND deadline <= now()` → atomically set `status = 'generating'` → `RPUSH velo:reel_jobs {session_id}`
 3. **2h reminder**: sessions where deadline is within the next 2h window and `reminder_2h_sent = false` → send push → set flag
 4. **30m reminder**: same pattern
 
 **Queue**: Redis LIST — `RPUSH` to enqueue, `BLPOP velo:reel_jobs 5` to dequeue (5s timeout for graceful shutdown). Job durability via PostgreSQL `sessions.status`, not Redis.
 
-**Retry**: on failure, increment `retry_count` and re-enqueue with exponential delay (30s → 2min → 10min). After 3 failures: `status = 'failed'`, push notify creator.
+**Retry**: on failure, increment `retry_count`; re-queue to `active` if `retry_count < 3`, else set `status = 'failed'`. After 3 failures: push notify creator.
 
 **Concurrency:** MVP runs a single worker goroutine processing one reel at a time. On a t3.large
 (2 vCPU), FFmpeg multi-pass saturates the CPU during composition. Concurrent reel generation would
