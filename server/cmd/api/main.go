@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/byuly/velo/server/internal/auth"
 	"github.com/byuly/velo/server/internal/config"
 	"github.com/byuly/velo/server/internal/ffmpeg"
+	apphandler "github.com/byuly/velo/server/internal/handler"
 	mw "github.com/byuly/velo/server/internal/middleware"
 	"github.com/byuly/velo/server/internal/reel"
 	"github.com/byuly/velo/server/internal/storage"
@@ -81,6 +83,11 @@ func main() {
 		}()
 	}
 
+	// --- Auth ---
+	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTIssuer)
+	blocklist := auth.NewRedisBlocklist(rdb)
+	authHandler := apphandler.NewAuthHandler(jwtManager, blocklist)
+
 	// --- HTTP server ---
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -108,6 +115,11 @@ func main() {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	r.Route("/auth", func(r chi.Router) {
+		r.Use(mw.Auth(jwtManager, blocklist))
+		r.Post("/logout", authHandler.Logout)
 	})
 
 	srv := &http.Server{

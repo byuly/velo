@@ -19,7 +19,9 @@ func TestJWTManager_CreateAndParseAccessToken(t *testing.T) {
 
 	got, err := manager.ParseAccessToken(token)
 	require.NoError(t, err)
-	assert.Equal(t, userID, got)
+	assert.Equal(t, userID, got.UserID)
+	assert.NotEmpty(t, got.JTI)
+	assert.False(t, got.ExpiresAt.IsZero())
 }
 
 func TestJWTManager_ParseAccessToken_ExpiredToken(t *testing.T) {
@@ -72,4 +74,21 @@ func TestJWTManager_ParseAccessToken_WrongIssuer(t *testing.T) {
 
 	_, err = other.ParseAccessToken(token)
 	require.Error(t, err)
+}
+
+func TestJWTManager_CreateAccessToken_UniqueJTI(t *testing.T) {
+	manager := NewJWTManager("test-secret", "velo")
+	userID := uuid.New()
+
+	token1, err := manager.CreateAccessToken(userID)
+	require.NoError(t, err)
+	token2, err := manager.CreateAccessToken(userID)
+	require.NoError(t, err)
+
+	claims1, err := manager.ParseAccessToken(token1)
+	require.NoError(t, err)
+	claims2, err := manager.ParseAccessToken(token2)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, claims1.JTI, claims2.JTI)
 }
