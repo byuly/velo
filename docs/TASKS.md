@@ -78,12 +78,13 @@ Tasks at the same level can be parallelized. Strict sequential ordering between 
 - **Files:** `internal/handler/response.go` + `response_test.go`
 
 ### Task 4: JWT + Auth Middleware
-- [ ] Status: not started
-- `JWTManager`: `CreateAccessToken(userID)`, `ParseAccessToken(token)`. HS256, 24h TTL
-- Auth middleware: extract Bearer, parse, inject user_id into context
+- [x] Status: complete — commits `fcd5427`, `183e005`, `087b208`, `034e137`
+- `JWTManager`: `CreateAccessToken(userID)`, `ParseAccessToken(token)`. HS256, **60-min TTL** (shortened from 24h; re-evaluate once refresh flow is wired end-to-end)
+- JTI claim added for per-token revocation; `AccessTokenClaims` return type
+- Redis token blocklist (`auth/blocklist.go`) + logout endpoint (`POST /auth/logout`)
+- Auth middleware: extract Bearer, parse, check blocklist, inject user_id into context
 - **Tests:** Round-trip, expired, wrong signing method, malformed. Middleware: valid/missing/invalid/expired → 200/401
-- **Files:** `internal/auth/jwt.go` + `jwt_test.go`, `internal/middleware/auth.go` + `auth_test.go`
-- **Modify:** `internal/config/config.go` — add `JWTSecret`
+- **Files:** `internal/auth/jwt.go` + `jwt_test.go`, `internal/auth/blocklist.go` + `blocklist_test.go`, `internal/middleware/auth.go` + `auth_test.go`, `internal/handler/auth.go` + `auth_test.go`
 
 ### Task 5: Apple Identity Token Validation
 - [ ] Status: not started
@@ -133,10 +134,11 @@ Tasks at the same level can be parallelized. Strict sequential ordering between 
 - **Files:** `internal/service/session.go` + `session_test.go`, `internal/handler/session.go` + `session_test.go`
 
 ### Task 12: Storage Interface (S3 Abstraction)
-- [ ] Status: not started
-- `ObjectStorage` interface: `GenerateUploadURL`, `HeadObject`. `MemoryStorage` stub
-- **Tests:** Generate URL, head object success, head object not found
-- **Files:** `internal/storage/storage.go` + `memory.go` + `memory_test.go`
+- [x] Status: complete — commit `a87f570`
+- `Storage` interface: `Download`, `Upload`, `ReelURL`. `S3Client` implementation + `MemoryStorage` stub
+- Note: interface is scoped to reel generation needs (download clips, upload reel, CDN URL). `GenerateUploadURL` / `HeadObject` for clip upload flow are still needed (Task 14)
+- **Tests:** Mock S3 operations via MemoryStorage
+- **Files:** `internal/storage/storage.go` + `mem.go` + `storage_test.go`
 
 ### Task 13: Clip Repository
 - [ ] Status: not started
@@ -164,29 +166,35 @@ Tasks at the same level can be parallelized. Strict sequential ordering between 
 - **Files:** `internal/push/push.go` + `noop.go` + `noop_test.go`
 
 ### Task 17: Redis Job Queue
-- [ ] Status: not started
-- `JobQueue` interface: `Enqueue`, `Dequeue`. Redis LIST (LPUSH/BRPOP)
-- **Tests (integration with testcontainers Redis):** Enqueue, dequeue, empty timeout, FIFO ordering
+- [x] Status: complete (built, intentionally bypassed for MVP) — commits in feat/reel-orchestration
+- `JobQueue` interface: `Enqueue`, `Dequeue`. Redis LIST (`RPUSH`/`BLPOP`)
+- **MVP note:** The scheduler calls `reel.Service.Generate()` inline and does not enqueue to Redis. Job durability is provided by `sessions.status` in Postgres. This queue will be wired in when the scheduler moves to the dedicated worker process.
+- **Tests:** `internal/queue/redis_test.go`
 - **Files:** `internal/queue/queue.go` + `redis.go` + `redis_test.go`
 
 ### Task 18: Scheduler
-- [ ] Status: not started
-- `Scheduler.Tick(ctx)` — deadline detection → set generating + enqueue; reminders → push + mark sent
-- `Scheduler.Run(ctx)` — 30s ticker loop
-- **Tests:** Deadline detection, already generating skip, 2h/30m reminders, already sent skip, full tick
-- **Files:** `internal/service/scheduler.go` + `scheduler_test.go`
+- [x] Status: complete (deadline detection; reminders deferred) — commits in feat/reel-orchestration
+- `Scheduler.Run(ctx)` — 30s ticker, `poll()` calls `store.ClaimDueSessions()` (Postgres `FOR UPDATE SKIP LOCKED`), then calls `service.Generate()` inline per session
+- **Package divergence:** lives in `internal/reel/scheduler.go`, not `internal/service/scheduler.go`
+- **Reminder logic (2h/30m) not yet implemented** — `reminder_2h_sent` / `reminder_30m_sent` columns exist in schema, scheduler does not yet query or set them
+- **Wired into API process** (`cmd/api/main.go`) — must move to `cmd/worker` before production (see §4.7 note in architecture.md)
+- **Tests:** `internal/reel/scheduler_test.go`
+- **Files:** `internal/reel/scheduler.go` + `scheduler_test.go`
 
 ### Task 19: Reel Job Processor
-- [ ] Status: not started
-- `ReelComposer` interface (stubbed). `ReelProcessor.Process(sessionID)` — fetch data, compose, upload, mark complete, push. Retry ≤3, then fail. `StubComposer` returns fake URL
-- **Tests:** Zero clips, all excluded, success, composer fails + retry, max retries → failed, worker loop
-- **Files:** `internal/service/reel.go` + `reel_test.go` + `reel_stub.go`
+- [x] Status: complete — commits in feat/reel-orchestration
+- `reel.Service.Generate(ctx, sessionID)` — fetches session data, runs `Align()`, downloads clips from S3, normalizes (VFR→CFR), composes via `ffmpeg.Engine`, uploads to S3, marks session complete
+- `reel.Store` — DB queries: `ClaimDueSessions`, `FetchSessionData`, `CompleteSession`, `FailSession`
+- Retry: `FailSession` increments `retry_count`, re-queues to `active` if < 3, else marks `failed`
+- **Package divergence:** lives in `internal/reel/service.go` + `internal/reel/store.go`, not `internal/service/reel.go`. No `ReelComposer` interface — uses `*ffmpeg.Engine` directly.
+- Push notification on complete/fail **not yet implemented** (push package not built, see Task 16)
+- **Tests:** `internal/reel/service_test.go`, `internal/reel/store_test.go`, `internal/reel/align_test.go`
+- **Files:** `internal/reel/service.go` + `store.go` + `align.go` + `*_test.go`
 
 ### Task 20: Wire Everything Together
-- [ ] Status: not started
-- Update `cmd/api/main.go` — instantiate all layers, mount routes (public: auth; protected: everything else)
-- Update `cmd/worker/main.go` — scheduler + reel processor
-- **Tests:** Health check, full auth flow, protected route without auth → 401
+- [~] Status: partially complete — commits in feat/reel-orchestration
+- **Done:** Reel pipeline (S3 client, ffmpeg engine, reel store/service/scheduler) wired into `cmd/api/main.go` with graceful shutdown (120s wait for in-progress reels). `/health` and `/auth/logout` routes mounted.
+- **Remaining:** Auth service (Sign in with Apple, refresh), user/session/clip handlers, remaining routes. `cmd/worker/main.go` is still a skeleton.
 - **Modify:** `cmd/api/main.go`, `cmd/worker/main.go`, config, `.env.example`, `docker-compose.yml`
 
 ### Task 21: End-to-End Integration Tests
