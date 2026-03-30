@@ -100,6 +100,7 @@ Before/after if this touches UI. Delete if backend-only.
 
 - **1 approval required** before merge (see GitHub setup below)
 - **No direct pushes to `main`**
+- **Merge strategy: merge commit** — use "Merge pull request" (not squash, not rebase) to preserve individual commit history
 - Keep PRs focused — one logical change per PR
 - All CI checks must pass before merge
 - Resolve all review comments before merging
