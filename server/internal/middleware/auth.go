@@ -10,7 +10,7 @@ import (
 	"github.com/byuly/velo/server/internal/handler"
 )
 
-func Auth(manager *auth.JWTManager) func(http.Handler) http.Handler {
+func Auth(manager *auth.JWTManager, blocklist auth.TokenBlocklist) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -24,7 +24,7 @@ func Auth(manager *auth.JWTManager) func(http.Handler) http.Handler {
 			}
 
 			token := strings.TrimPrefix(authHeader, "Bearer ")
-			userID, err := manager.ParseAccessToken(token)
+			claims, err := manager.ParseAccessToken(token)
 			if err != nil {
 				slog.Warn("invalid access token",
 					slog.String("error", err.Error()),
@@ -35,7 +35,25 @@ func Auth(manager *auth.JWTManager) func(http.Handler) http.Handler {
 				return
 			}
 
-			ctx := handler.SetUserID(r.Context(), userID)
+			blocked, err := blocklist.IsBlocked(r.Context(), claims.JTI)
+			if err != nil {
+				slog.Error("blocklist check failed, allowing request",
+					slog.String("error", err.Error()),
+					slog.String("method", r.Method),
+					slog.String("path", r.URL.Path),
+				)
+			}
+			if blocked {
+				slog.Warn("revoked token used",
+					slog.String("jti", claims.JTI),
+					slog.String("method", r.Method),
+					slog.String("path", r.URL.Path),
+				)
+				handler.Error(w, domain.ErrUnauthorized)
+				return
+			}
+
+			ctx := handler.SetUserID(r.Context(), claims.UserID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
