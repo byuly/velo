@@ -61,3 +61,15 @@ func TestJWTManager_ParseAccessToken_MalformedToken(t *testing.T) {
 	_, err := manager.ParseAccessToken("not-a-jwt")
 	require.Error(t, err)
 }
+
+func TestJWTManager_ParseAccessToken_WrongIssuer(t *testing.T) {
+	manager := NewJWTManager("test-secret", "velo")
+	other := NewJWTManager("test-secret", "shipal-service")
+
+	userID := uuid.New()
+	token, err := manager.CreateAccessToken(userID)
+	require.NoError(t, err)
+
+	_, err = other.ParseAccessToken(token)
+	require.Error(t, err)
+}

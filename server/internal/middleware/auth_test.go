@@ -8,7 +8,6 @@ import (
 
 	"github.com/byuly/velo/server/internal/auth"
 	"github.com/byuly/velo/server/internal/handler"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,22 +65,22 @@ func TestAuth_InvalidToken(t *testing.T) {
 }
 
 func TestAuth_ExpiredToken(t *testing.T) {
+	now := time.Date(2026, 3, 14, 12, 0, 0, 0, time.UTC)
 	manager := auth.NewJWTManager("test-secret", "velo")
-	claims := jwt.RegisteredClaims{
-		Subject:   uuid.NewString(),
-		Issuer:    "velo",
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)),
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte("test-secret"))
+	manager.SetTimeFunc(func() time.Time { return now })
+
+	userID := uuid.New()
+	token, err := manager.CreateAccessToken(userID)
 	require.NoError(t, err)
+
+	manager.SetTimeFunc(func() time.Time { return now.Add(61 * time.Minute) })
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer "+signed)
+	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 
 	Auth(manager)(next).ServeHTTP(w, req)
