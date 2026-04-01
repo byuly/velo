@@ -298,7 +298,7 @@ func TestScaleClip(t *testing.T) {
 	norm := filepath.Join(tmp, "norm.mp4")
 	require.NoError(t, c.NormalizeClip(ctx, clipGreen5s, norm))
 
-	dims := PanelDimsFor(2) // 720×640
+	dims := mustDims(t,2) // 720×640
 	out := filepath.Join(tmp, "scaled.mp4")
 	require.NoError(t, c.ScaleClip(ctx, norm, out, dims))
 
@@ -319,7 +319,7 @@ func TestScaleClip_Identity(t *testing.T) {
 	norm := filepath.Join(tmp, "norm.mp4")
 	require.NoError(t, c.NormalizeClip(ctx, clipGreen5s, norm))
 
-	dims := PanelDimsFor(1) // 720×1280 — same as source
+	dims := mustDims(t,1) // 720×1280 — same as source
 	out := filepath.Join(tmp, "identity.mp4")
 	require.NoError(t, c.ScaleClip(ctx, norm, out, dims))
 
@@ -336,7 +336,7 @@ func TestGenerateBlackPanel(t *testing.T) {
 	require.NoError(t, err)
 
 	out := filepath.Join(t.TempDir(), "black.mp4")
-	dims := PanelDimsFor(2) // 720×640
+	dims := mustDims(t,2) // 720×640
 	target := 7.5
 	require.NoError(t, c.GenerateBlackPanel(ctx, out, dims, target, "Offline"))
 
@@ -356,7 +356,7 @@ func TestStackPanels_1(t *testing.T) {
 	c, err := New()
 	require.NoError(t, err)
 
-	dims := PanelDimsFor(1)
+	dims := mustDims(t,1)
 	panel := makePanel(t, ctx, c, clipGreen5s, dims, filepath.Join(t.TempDir(), "p0.mp4"))
 
 	out := filepath.Join(t.TempDir(), "stack1.mp4")
@@ -376,7 +376,7 @@ func TestStackPanels_2(t *testing.T) {
 	require.NoError(t, err)
 
 	tmp := t.TempDir()
-	dims := PanelDimsFor(2)
+	dims := mustDims(t,2)
 
 	p1 := makePanel(t, ctx, c, clipRed10s, dims, filepath.Join(tmp, "p1.mp4"))
 	p2 := makePanel(t, ctx, c, clipGreen5s, dims, filepath.Join(tmp, "p2.mp4"))
@@ -403,7 +403,7 @@ func TestStackPanels_4(t *testing.T) {
 	require.NoError(t, err)
 
 	tmp := t.TempDir()
-	dims := PanelDimsFor(4) // 360×640
+	dims := mustDims(t,4) // 360×640
 
 	panels := make([]PanelInput, 4)
 	srcs := []string{clipRed10s, clipBlue8s, clipGreen5s, clipRed10s}
@@ -429,7 +429,7 @@ func TestStackPanels_AudioRotation(t *testing.T) {
 	require.NoError(t, err)
 
 	tmp := t.TempDir()
-	dims := PanelDimsFor(2)
+	dims := mustDims(t,2)
 
 	p0 := makePanel(t, ctx, c, clipRed10s, dims, filepath.Join(tmp, "p0.mp4"))
 	p1 := makePanel(t, ctx, c, clipBlue8s, dims, filepath.Join(tmp, "p1.mp4"))
@@ -453,7 +453,7 @@ func TestConcatSections(t *testing.T) {
 	require.NoError(t, err)
 
 	tmp := t.TempDir()
-	dims := PanelDimsFor(2)
+	dims := mustDims(t,2)
 
 	// Build two section files from normalized clips.
 	s1 := makePanel(t, ctx, c, clipRed10s, dims, filepath.Join(tmp, "s1.mp4"))
@@ -516,10 +516,10 @@ func TestOverlayTitle_EmptyTitle(t *testing.T) {
 	require.NoError(t, err)
 
 	tmp := t.TempDir()
-	panel := makePanel(t, ctx, c, clipGreen5s, PanelDimsFor(2), filepath.Join(tmp, "p.mp4"))
+	panel := makePanel(t, ctx, c, clipGreen5s, mustDims(t,2), filepath.Join(tmp, "p.mp4"))
 
 	out := filepath.Join(tmp, "titled.mp4")
-	require.NoError(t, c.OverlayTitle(ctx, panel, out, "", PanelDimsFor(2)))
+	require.NoError(t, c.OverlayTitle(ctx, panel, out, "", mustDims(t,2)))
 
 	// Empty title → symlink, not re-encode.
 	target, err := os.Readlink(out)
@@ -534,10 +534,10 @@ func TestOverlayTitle_NoDrawtext(t *testing.T) {
 	c := NewWithBin("ffmpeg", "ffprobe") // hasDrawtext=false by default
 
 	tmp := t.TempDir()
-	panel := makePanel(t, ctx, c, clipGreen5s, PanelDimsFor(2), filepath.Join(tmp, "p.mp4"))
+	panel := makePanel(t, ctx, c, clipGreen5s, mustDims(t,2), filepath.Join(tmp, "p.mp4"))
 
 	out := filepath.Join(tmp, "titled.mp4")
-	require.NoError(t, c.OverlayTitle(ctx, panel, out, "sleeping", PanelDimsFor(2)))
+	require.NoError(t, c.OverlayTitle(ctx, panel, out, "sleeping", mustDims(t,2)))
 
 	// Without drawtext → symlink fallback.
 	target, err := os.Readlink(out)
@@ -552,7 +552,7 @@ func TestOverlayTitle_WithDrawtext(t *testing.T) {
 	require.NoError(t, err)
 
 	tmp := t.TempDir()
-	dims := PanelDimsFor(2)
+	dims := mustDims(t,2)
 	panel := makePanel(t, ctx, c, clipGreen5s, dims, filepath.Join(tmp, "p.mp4"))
 
 	out := filepath.Join(tmp, "titled.mp4")
@@ -572,7 +572,7 @@ func TestOverlayTitle_SpecialChars(t *testing.T) {
 	require.NoError(t, err)
 
 	tmp := t.TempDir()
-	dims := PanelDimsFor(2)
+	dims := mustDims(t,2)
 	panel := makePanel(t, ctx, c, clipGreen5s, dims, filepath.Join(tmp, "p.mp4"))
 
 	out := filepath.Join(tmp, "titled.mp4")
@@ -584,6 +584,14 @@ func TestOverlayTitle_SpecialChars(t *testing.T) {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+// mustDims calls PanelDimsFor and fails the test on error.
+func mustDims(t *testing.T, n int) PanelDims {
+	t.Helper()
+	dims, err := PanelDimsFor(n)
+	require.NoError(t, err)
+	return dims
+}
 
 // makePanel normalizes a clip and scales it to target dims.
 // Audio is preserved through both steps (no silent-audio mux hack needed).
