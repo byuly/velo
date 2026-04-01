@@ -47,7 +47,7 @@ func TestAuth_ValidToken(t *testing.T) {
 
 	var gotUserID uuid.UUID
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotUserID = handler.UserID(r.Context())
+		gotUserID, _ = handler.UserID(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
 

@@ -180,12 +180,12 @@ func TestDecode_ExtraFieldsIgnored(t *testing.T) {
 func TestUserID_RoundTrip(t *testing.T) {
 	id := uuid.New()
 	ctx := SetUserID(context.Background(), id)
-	got := UserID(ctx)
+	got, ok := UserID(ctx)
+	assert.True(t, ok)
 	assert.Equal(t, id, got)
 }
 
-func TestUserID_PanicsWhenMissing(t *testing.T) {
-	assert.Panics(t, func() {
-		UserID(context.Background())
-	})
+func TestUserID_MissingReturnsFalse(t *testing.T) {
+	_, ok := UserID(context.Background())
+	assert.False(t, ok)
 }
