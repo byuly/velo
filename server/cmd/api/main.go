@@ -51,8 +51,21 @@ func main() {
 	}
 	defer db.Close()
 
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-	defer rdb.Close()
+	// --- Token blocklist (Redis or in-memory) ---
+	var blocklist auth.TokenBlocklist
+	var rdb *redis.Client
+
+	if cfg.RedisAddr != "" {
+		rdb = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+		defer rdb.Close()
+		blocklist = auth.NewRedisBlocklist(rdb)
+		log.Info("using Redis token blocklist", slog.String("addr", cfg.RedisAddr))
+	} else {
+		memBl := auth.NewMemoryBlocklist(5 * time.Minute)
+		defer memBl.Stop()
+		blocklist = memBl
+		log.Info("using in-memory token blocklist (Redis not configured)")
+	}
 
 	// --- Reel generation pipeline ---
 	var wg sync.WaitGroup
@@ -85,7 +98,6 @@ func main() {
 
 	// --- Auth ---
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTIssuer)
-	blocklist := auth.NewRedisBlocklist(rdb)
 	authHandler := apphandler.NewAuthHandler(jwtManager, blocklist)
 
 	// --- HTTP server ---
@@ -109,10 +121,12 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]string{"status": "error", "detail": "database unreachable"})
 			return
 		}
-		if err := rdb.Ping(r.Context()).Err(); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{"status": "error", "detail": "redis unreachable"})
-			return
+		if rdb != nil {
+			if err := rdb.Ping(r.Context()).Err(); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				json.NewEncoder(w).Encode(map[string]string{"status": "error", "detail": "redis unreachable"})
+				return
+			}
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
