@@ -113,8 +113,7 @@ func probeDrawtext(ctx context.Context, ffmpegBin string) bool {
 }
 
 // NormalizeClip normalizes VFR→CFR at 30fps at the original resolution.
-// Audio is preserved. This is Phase 1 of the two-phase pipeline (eager,
-// runs at slot-end). Scaling is deferred to ScaleClip (Phase 2, at deadline).
+// Audio is preserved. Called during reel generation before composition.
 func (c *Composer) NormalizeClip(ctx context.Context, input, output string) error {
 	return c.run(ctx,
 		"-y",
@@ -130,9 +129,8 @@ func (c *Composer) NormalizeClip(ctx context.Context, input, output string) erro
 }
 
 // ScaleClip scales a pre-normalized clip to the target panel dimensions with a
-// lightweight re-encode (input is already CRF 23 from Phase 1). Audio is
-// stream-copied. This is Phase 2 of the two-phase pipeline (runs at deadline
-// when participant count is known).
+// lightweight re-encode (input is already CRF 23 from NormalizeClip). Audio is
+// stream-copied. Called during reel composition when participant count is known.
 func (c *Composer) ScaleClip(ctx context.Context, input, output string, dims PanelDims) error {
 	vf := fmt.Sprintf("scale=%d:%d", dims.Width, dims.Height)
 	return c.run(ctx,
