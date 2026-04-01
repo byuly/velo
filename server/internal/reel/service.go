@@ -12,12 +12,22 @@ import (
 	"github.com/google/uuid"
 )
 
+// clipNormalizer normalizes a raw clip (VFR→CFR 30fps).
+type clipNormalizer interface {
+	NormalizeClip(ctx context.Context, input, output string) error
+}
+
+// reelComposer composes a final reel from aligned sections.
+type reelComposer interface {
+	Compose(ctx context.Context, req ffmpeg.ComposeRequest) (string, error)
+}
+
 // Service orchestrates reel generation for a single session.
 type Service struct {
 	store       *Store
 	storage     storage.Storage
-	engine      *ffmpeg.Engine
-	composer    *ffmpeg.Composer
+	engine      reelComposer
+	composer    clipNormalizer
 	clipsBucket string
 	reelsBucket string
 	log         *slog.Logger
@@ -27,8 +37,8 @@ type Service struct {
 func NewService(
 	store *Store,
 	storage storage.Storage,
-	engine *ffmpeg.Engine,
-	composer *ffmpeg.Composer,
+	engine reelComposer,
+	composer clipNormalizer,
 	clipsBucket, reelsBucket string,
 	log *slog.Logger,
 ) *Service {
