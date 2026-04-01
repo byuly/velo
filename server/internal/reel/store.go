@@ -107,11 +107,24 @@ func (s *Store) ClaimDueSessions(ctx context.Context, limit int) ([]uuid.UUID, e
 }
 
 // FetchSessionData loads all data needed to generate a session's reel.
+// Uses a REPEATABLE READ transaction to ensure a consistent snapshot across
+// all five queries.
 func (s *Store) FetchSessionData(ctx context.Context, sessionID uuid.UUID) (*SessionData, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Set isolation level for consistent reads.
+	if _, err := tx.Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"); err != nil {
+		return nil, fmt.Errorf("set tx isolation: %w", err)
+	}
+
 	var data SessionData
 
 	// 1. Session
-	err := s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		SELECT id, creator_id, max_section_duration_s, retry_count
 		FROM sessions WHERE id = $1
 	`, sessionID).Scan(
@@ -125,7 +138,7 @@ func (s *Store) FetchSessionData(ctx context.Context, sessionID uuid.UUID) (*Ses
 	}
 
 	// 2. Slots
-	slotRows, err := s.pool.Query(ctx, `
+	slotRows, err := tx.Query(ctx, `
 		SELECT id, slot_order, name
 		FROM session_slots WHERE session_id = $1
 		ORDER BY slot_order
@@ -143,7 +156,7 @@ func (s *Store) FetchSessionData(ctx context.Context, sessionID uuid.UUID) (*Ses
 	}
 
 	// 3. Participants
-	partRows, err := s.pool.Query(ctx, `
+	partRows, err := tx.Query(ctx, `
 		SELECT user_id, display_name_snapshot, joined_at, status
 		FROM session_participants WHERE session_id = $1
 	`, sessionID)
@@ -160,7 +173,7 @@ func (s *Store) FetchSessionData(ctx context.Context, sessionID uuid.UUID) (*Ses
 	}
 
 	// 4. Clips
-	clipRows, err := s.pool.Query(ctx, `
+	clipRows, err := tx.Query(ctx, `
 		SELECT id, user_id, slot_id, s3_key, recorded_at, duration_ms
 		FROM clips WHERE session_id = $1
 		ORDER BY slot_id, user_id, recorded_at
@@ -178,7 +191,7 @@ func (s *Store) FetchSessionData(ctx context.Context, sessionID uuid.UUID) (*Ses
 	}
 
 	// 5. Participations
-	spRows, err := s.pool.Query(ctx, `
+	spRows, err := tx.Query(ctx, `
 		SELECT sp.slot_id, sp.user_id, sp.status, sp.title
 		FROM slot_participations sp
 		JOIN session_slots ss ON ss.id = sp.slot_id
@@ -194,6 +207,10 @@ func (s *Store) FetchSessionData(ctx context.Context, sessionID uuid.UUID) (*Ses
 	})
 	if err != nil {
 		return nil, fmt.Errorf("scan participations: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit tx: %w", err)
 	}
 
 	return &data, nil

@@ -40,19 +40,19 @@ type PanelDims struct{ Width, Height int }
 
 // PanelDimsFor returns the correct panel dimensions for the given participant count.
 // 1→720×1280  2→720×640  3→720×427  4→360×640
-// Panics on n <= 0 (logic error) or n > 4 (unsupported layout).
-func PanelDimsFor(n int) PanelDims {
+// Returns an error for unsupported counts (n <= 0 or n > 4).
+func PanelDimsFor(n int) (PanelDims, error) {
 	switch n {
 	case 1:
-		return PanelDims{720, 1280}
+		return PanelDims{720, 1280}, nil
 	case 2:
-		return PanelDims{720, 640}
+		return PanelDims{720, 640}, nil
 	case 3:
-		return PanelDims{720, 427}
+		return PanelDims{720, 427}, nil
 	case 4:
-		return PanelDims{360, 640}
+		return PanelDims{360, 640}, nil
 	default:
-		panic(fmt.Sprintf("PanelDimsFor: unsupported participant count %d (must be 1-4)", n))
+		return PanelDims{}, fmt.Errorf("unsupported participant count %d (must be 1-4)", n)
 	}
 }
 

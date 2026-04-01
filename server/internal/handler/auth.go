@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -44,6 +45,8 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 			slog.String("error", err.Error()),
 			slog.String("jti", claims.JTI),
 		)
+		Error(w, fmt.Errorf("revoke token: %w", err))
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)

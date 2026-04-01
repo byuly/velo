@@ -10,7 +10,7 @@ type Config struct {
 	ServerAddr  string `env:"SERVER_ADDR" envDefault:":8080"`
 	LogLevel    string `env:"LOG_LEVEL" envDefault:"info"`
 	DatabaseURL string `env:"DATABASE_URL,required"`
-	RedisAddr   string `env:"REDIS_ADDR,required"`
+	RedisAddr   string `env:"REDIS_ADDR"`
 
 	// JWTSecret is the HMAC signing key for access tokens. Must be at least 32 bytes.
 	JWTSecret string `env:"JWT_SECRET,required"`

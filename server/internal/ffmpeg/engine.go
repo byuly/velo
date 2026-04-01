@@ -59,7 +59,10 @@ func (e *Engine) Compose(ctx context.Context, req ComposeRequest) (string, error
 			return "", fmt.Errorf("compose: section %d has no participants", sIdx)
 		}
 
-		dims := PanelDimsFor(len(section.Participants))
+		dims, err := PanelDimsFor(len(section.Participants))
+		if err != nil {
+			return "", fmt.Errorf("section %d: %w", sIdx, err)
+		}
 		var panels []PanelInput
 
 		for pIdx, p := range section.Participants {
