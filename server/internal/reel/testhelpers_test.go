@@ -2,8 +2,11 @@ package reel
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -56,8 +59,13 @@ func createTestParticipant(t *testing.T, pool *pgxpool.Pool, sessionID, userID u
 
 func createTestClip(t *testing.T, pool *pgxpool.Pool, sessionID, userID, slotID uuid.UUID) {
 	t.Helper()
+	createTestClipReturning(t, pool, sessionID, userID, slotID)
+}
+
+func createTestClipReturning(t *testing.T, pool *pgxpool.Pool, sessionID, userID, slotID uuid.UUID) domain.Clip {
+	t.Helper()
 	slotIDPtr := &slotID
-	testutil.CreateClip(t, pool, sessionID, userID, &testutil.ClipOverrides{
+	return testutil.CreateClip(t, pool, sessionID, userID, &testutil.ClipOverrides{
 		SlotID: &slotIDPtr,
 	})
 }
@@ -78,4 +86,35 @@ func setRetryCount(t *testing.T, pool *pgxpool.Pool, sessionID uuid.UUID, count 
 	if err != nil {
 		t.Fatalf("set retry count: %v", err)
 	}
+}
+
+// requireFFmpeg skips the test if ffmpeg is not in PATH.
+func requireFFmpeg(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not in PATH — skipping integration test")
+	}
+}
+
+// generateSyntheticClip generates a tiny synthetic MP4 clip using ffmpeg lavfi.
+// Returns the path to the generated file. The file lives in dir.
+func generateSyntheticClip(t *testing.T, dir, name string, durationSec int) string {
+	t.Helper()
+	out := filepath.Join(dir, name)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-y",
+		"-f", "lavfi", "-i", fmt.Sprintf("color=c=red:s=720x1280:r=30:d=%d", durationSec),
+		"-f", "lavfi", "-i", fmt.Sprintf("sine=frequency=440:sample_rate=44100:d=%d", durationSec),
+		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+		"-c:a", "aac", "-b:a", "64k", "-ac", "1",
+		out,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("generate synthetic clip %s: %v\n%s", name, err, output)
+	}
+	return out
 }
