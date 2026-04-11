@@ -2,6 +2,7 @@ package reel
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 )
@@ -56,6 +57,38 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			s.log.Info("reel scheduler shutting down")
 			return nil
 		case <-ticker.C:
+		}
+	}
+}
+
+// RunOnce performs a single poll: claims all due sessions and processes them,
+// then returns. Intended for scheduled worker tasks (e.g., EventBridge → ECS RunTask).
+func (s *Scheduler) RunOnce(ctx context.Context) error {
+	s.log.Info("reel worker: checking for due sessions")
+
+	for {
+		ids, err := s.store.ClaimDueSessions(ctx, DefaultClaimLimit)
+		if err != nil {
+			return fmt.Errorf("claim due sessions: %w", err)
+		}
+		if len(ids) == 0 {
+			s.log.Info("reel worker: no more due sessions")
+			return nil
+		}
+
+		for _, id := range ids {
+			log := s.log.With(slog.String("session_id", id.String()))
+			log.Info("generating reel")
+
+			if err := s.service.Generate(ctx, id); err != nil {
+				log.Error("reel generation failed", slog.String("error", err.Error()))
+				if failErr := s.store.FailSession(ctx, id); failErr != nil {
+					log.Error("failed to update session status", slog.String("error", failErr.Error()))
+				}
+				continue
+			}
+
+			log.Info("reel generation complete")
 		}
 	}
 }
