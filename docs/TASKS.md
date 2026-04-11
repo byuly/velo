@@ -175,9 +175,10 @@ Tasks at the same level can be parallelized. Strict sequential ordering between 
 ### Task 18: Scheduler
 - [x] Status: complete (deadline detection; reminders deferred) — commits in feat/reel-orchestration
 - `Scheduler.Run(ctx)` — 30s ticker, `poll()` calls `store.ClaimDueSessions()` (Postgres `FOR UPDATE SKIP LOCKED`), then calls `service.Generate()` inline per session
+- `Scheduler.RunOnce(ctx)` — single-pass mode: claims all due sessions, processes them, returns. Used by `cmd/worker` for EventBridge-triggered runs.
 - **Package divergence:** lives in `internal/reel/scheduler.go`, not `internal/service/scheduler.go`
 - **Reminder logic (2h/30m) not yet implemented** — `reminder_2h_sent` / `reminder_30m_sent` columns exist in schema, scheduler does not yet query or set them
-- **Wired into API process** (`cmd/api/main.go`) — must move to `cmd/worker` before production (see §4.7 note in architecture.md)
+- **Separated from API process** — `cmd/worker/main.go` calls `RunOnce()` and exits. Triggered by EventBridge every 5 min in production.
 - **Tests:** `internal/reel/scheduler_test.go`
 - **Files:** `internal/reel/scheduler.go` + `scheduler_test.go`
 
@@ -193,8 +194,8 @@ Tasks at the same level can be parallelized. Strict sequential ordering between 
 
 ### Task 20: Wire Everything Together
 - [~] Status: partially complete — commits in feat/reel-orchestration
-- **Done:** Reel pipeline (S3 client, ffmpeg engine, reel store/service/scheduler) wired into `cmd/api/main.go` with graceful shutdown (120s wait for in-progress reels). `/health` and `/auth/logout` routes mounted.
-- **Remaining:** Auth service (Sign in with Apple, refresh), user/session/clip handlers, remaining routes. `cmd/worker/main.go` is still a skeleton.
+- **Done:** Reel pipeline wired into `cmd/worker/main.go` (run-and-exit via `RunOnce()`). API process (`cmd/api/main.go`) serves HTTP only — no FFmpeg, no scheduler. `/health` and `/auth/logout` routes mounted. Auto-migration on startup for both API and worker. Docker + ECS/Fargate deployment config complete.
+- **Remaining:** Auth service (Sign in with Apple, refresh), user/session/clip handlers, remaining routes.
 - **Modify:** `cmd/api/main.go`, `cmd/worker/main.go`, config, `.env.example`, `docker-compose.yml`
 
 ### Task 21: End-to-End Integration Tests
