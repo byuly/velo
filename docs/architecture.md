@@ -424,9 +424,9 @@ The spike's `NormalizeClip(path, dims, timestamp)` combines VFR fix + scale. The
 
 ### 4.7 Job Queue & Scheduler
 
-> **MVP status:** The scheduler currently runs inside the **API process** (`cmd/api/main.go`), not in a separate worker. `cmd/worker/main.go` is a skeleton. This is a known deviation — FFmpeg is CPU-bound on a t3.large and will compete with HTTP request handling during reel generation. Must be separated before production load. The worker-process design below is the target architecture.
+> **MVP status:** The scheduler now runs as a **separate worker process** (`cmd/worker/main.go`). It uses `RunOnce()` for a single claim-and-process pass, then exits. In production, EventBridge triggers the worker every 5 minutes via ECS RunTask. The API process (`cmd/api/main.go`) no longer contains the scheduler or FFmpeg — it only serves HTTP.
 >
-> The `internal/queue/` Redis LIST implementation is complete but intentionally bypassed for MVP: the scheduler calls `reel.Service.Generate()` inline rather than enqueuing. Durability is provided by `sessions.status` in Postgres (not Redis). The queue will be wired in when the scheduler moves to the worker process.
+> The `internal/queue/` Redis LIST implementation is complete but intentionally bypassed for MVP: the worker calls `reel.Service.Generate()` inline via `scheduler.RunOnce()` rather than enqueuing. Durability is provided by `sessions.status` in Postgres (not Redis).
 
 The worker process runs a `time.Ticker` every 30 seconds with four queries per tick:
 

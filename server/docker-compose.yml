@@ -1,16 +1,31 @@
 services:
   api:
-    build: { context: ., dockerfile: Dockerfile }
+    build:
+      context: .
+      dockerfile: Dockerfile
     command: ["/usr/local/bin/api"]
     ports: ["8080:8080"]
     env_file: .env
-    depends_on: [postgres, redis]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
 
   worker:
-    build: { context: ., dockerfile: Dockerfile }
+    build:
+      context: .
+      dockerfile: Dockerfile
     command: ["/usr/local/bin/worker"]
     env_file: .env
-    depends_on: [postgres, redis]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["worker"]
 
   postgres:
     image: postgres:16-alpine
@@ -19,9 +34,22 @@ services:
       POSTGRES_DB: velo
       POSTGRES_USER: velo
       POSTGRES_PASSWORD: ${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U velo"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    ports: ["5432:5432"]
 
   redis:
     image: redis:7-alpine
+    profiles: ["redis"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    ports: ["6379:6379"]
 
 volumes:
   pgdata:

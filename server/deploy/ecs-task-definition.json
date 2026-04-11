@@ -1,0 +1,58 @@
+{
+  "family": "velo-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/veloTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/velo-api:latest",
+      "essential": true,
+      "command": ["/usr/local/bin/api"],
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"],
+        "interval": 15,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 30
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/velo-api",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "api"
+        }
+      },
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/velo/DATABASE_URL"
+        },
+        {
+          "name": "JWT_SECRET",
+          "valueFrom": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/velo/JWT_SECRET"
+        }
+      ],
+      "environment": [
+        { "name": "SERVER_ADDR", "value": ":8080" },
+        { "name": "LOG_LEVEL", "value": "info" },
+        { "name": "JWT_ISSUER", "value": "velo" },
+        { "name": "APPLE_APP_ID", "value": "com.example.app" },
+        { "name": "AWS_REGION", "value": "us-west-2" },
+        { "name": "S3_CLIPS_BUCKET", "value": "velo-clips" },
+        { "name": "S3_REELS_BUCKET", "value": "velo-reels" },
+        { "name": "CLOUDFRONT_DOMAIN", "value": "cdn.example.com" }
+      ]
+    }
+  ]
+}

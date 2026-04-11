@@ -1,0 +1,7 @@
+.git
+.env
+.env.*
+*.exe
+api
+worker
+docs/

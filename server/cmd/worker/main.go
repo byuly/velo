@@ -8,9 +8,14 @@ import (
 	"syscall"
 
 	"github.com/byuly/velo/server/internal/config"
+	"github.com/byuly/velo/server/internal/ffmpeg"
+	dbmigrate "github.com/byuly/velo/server/internal/migrate"
+	"github.com/byuly/velo/server/internal/reel"
+	"github.com/byuly/velo/server/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 )
+
+var version = "dev"
 
 func main() {
 	cfg, err := config.Load()
@@ -28,6 +33,8 @@ func main() {
 	log := slog.New(handler)
 	slog.SetDefault(log)
 
+	log.Info("reel worker starting", slog.String("version", version))
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -38,10 +45,39 @@ func main() {
 	}
 	defer db.Close()
 
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-	defer rdb.Close()
+	// --- Auto-migrate ---
+	migPath := "/migrations"
+	if _, err := os.Stat(migPath); os.IsNotExist(err) {
+		migPath = "migrations"
+	}
+	if err := dbmigrate.Up(cfg.DatabaseURL, migPath, log); err != nil {
+		log.Error("auto-migration failed", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 
-	log.Info("worker started")
-	<-ctx.Done()
-	log.Info("worker shutting down")
+	// --- Reel pipeline ---
+	s3Client, err := storage.NewS3Client(ctx, cfg.AWSRegion, cfg.AWSAccessKeyID, cfg.AWSSecretAccessKey, cfg.CloudFrontDomain)
+	if err != nil {
+		log.Error("failed to create S3 client", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	composer, err := ffmpeg.New()
+	if err != nil {
+		log.Error("ffmpeg unavailable — cannot generate reels", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	engine := ffmpeg.NewEngine(composer)
+	reelStore := reel.NewStore(db)
+	reelService := reel.NewService(reelStore, s3Client, engine, composer, cfg.S3ClipsBucket, cfg.S3ReelsBucket, log)
+	scheduler := reel.NewScheduler(reelStore, reelService, log)
+
+	// Single pass: claim due sessions, process, exit.
+	if err := scheduler.RunOnce(ctx); err != nil {
+		log.Error("worker failed", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	log.Info("reel worker finished")
 }

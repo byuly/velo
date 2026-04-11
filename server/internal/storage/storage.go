@@ -34,14 +34,19 @@ type S3Client struct {
 	cdnDomain string
 }
 
-// NewS3Client creates an S3-backed Storage using explicit credentials.
+// NewS3Client creates an S3-backed Storage.
+// If accessKeyID is provided, static credentials are used.
+// If empty, the default credential chain is used (ECS task role, env, shared config).
 func NewS3Client(ctx context.Context, region, accessKeyID, secretAccessKey, cdnDomain string) (*S3Client, error) {
-	cfg, err := awsconfig.LoadDefaultConfig(ctx,
+	opts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(region),
-		awsconfig.WithCredentialsProvider(
+	}
+	if accessKeyID != "" {
+		opts = append(opts, awsconfig.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, ""),
-		),
-	)
+		))
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
