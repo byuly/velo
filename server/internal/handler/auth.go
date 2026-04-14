@@ -9,15 +9,17 @@ import (
 
 	"github.com/byuly/velo/server/internal/auth"
 	"github.com/byuly/velo/server/internal/domain"
+	"github.com/byuly/velo/server/internal/service"
 )
 
 type AuthHandler struct {
 	jwt       *auth.JWTManager
 	blocklist auth.TokenBlocklist
+	svc       service.AuthService
 }
 
-func NewAuthHandler(jwt *auth.JWTManager, blocklist auth.TokenBlocklist) *AuthHandler {
-	return &AuthHandler{jwt: jwt, blocklist: blocklist}
+func NewAuthHandler(jwt *auth.JWTManager, blocklist auth.TokenBlocklist, svc service.AuthService) *AuthHandler {
+	return &AuthHandler{jwt: jwt, blocklist: blocklist, svc: svc}
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
@@ -50,4 +52,54 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AuthHandler) Apple(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IdentityToken string `json:"identity_token"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, err)
+		return
+	}
+	if body.IdentityToken == "" {
+		Error(w, domain.ValidationError("identity_token is required"))
+		return
+	}
+
+	accessToken, refreshToken, user, err := h.svc.SignInWithApple(r.Context(), body.IdentityToken)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]any{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"user":          user,
+	})
+}
+
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := Decode(r, &body); err != nil {
+		Error(w, err)
+		return
+	}
+	if body.RefreshToken == "" {
+		Error(w, domain.ValidationError("refresh_token is required"))
+		return
+	}
+
+	accessToken, err := h.svc.Refresh(r.Context(), body.RefreshToken)
+	if err != nil {
+		Error(w, err)
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]any{
+		"access_token": accessToken,
+	})
 }
