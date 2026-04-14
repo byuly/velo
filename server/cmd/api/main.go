@@ -78,7 +78,7 @@ func main() {
 
 	// --- Auth ---
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTIssuer)
-	authHandler := apphandler.NewAuthHandler(jwtManager, blocklist)
+	authHandler := apphandler.NewAuthHandler(jwtManager, blocklist, nil) // svc wired in #22
 
 	// --- HTTP server ---
 	r := chi.NewRouter()
