@@ -128,26 +128,32 @@ func TestUpsertByAppleSub_DoesNotTouchUpdatedAt(t *testing.T) {
 	require.True(t, fixture.UpdatedAt.Equal(u.UpdatedAt), "upsert on existing user must not change updated_at")
 }
 
-// --- Update ---
+// --- UpdateDisplayName ---
 
-func TestUpdate_DisplayName(t *testing.T) {
+func TestUpdateDisplayName_Set(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := repository.NewUserPg(pool)
 	ctx := context.Background()
 
-	fixture := testutil.CreateUser(t, pool, nil)
+	fixture := testutil.CreateUser(t, pool, &testutil.UserOverrides{
+		AvatarURL: ptr(ptr("https://example.com/a.png")),
+		APNsToken: ptr(ptr("apns_token_xyz")),
+	})
 
-	updated, err := repo.Update(ctx, domain.User{ID: fixture.ID, DisplayName: ptr("Alice"), AvatarURL: nil})
+	err := repo.UpdateDisplayName(ctx, fixture.ID, "Alice")
 	require.NoError(t, err)
-	require.NotNil(t, updated.DisplayName)
-	require.Equal(t, "Alice", *updated.DisplayName)
-	require.Nil(t, updated.AvatarURL)
-	require.True(t, updated.UpdatedAt.After(fixture.UpdatedAt) || updated.UpdatedAt.Equal(fixture.UpdatedAt))
-	// APNsToken unchanged
-	require.Equal(t, fixture.APNsToken, updated.APNsToken)
+
+	u, err := repo.GetByID(ctx, fixture.ID)
+	require.NoError(t, err)
+	require.NotNil(t, u.DisplayName)
+	require.Equal(t, "Alice", *u.DisplayName)
+	// Sibling columns untouched
+	require.Equal(t, fixture.AvatarURL, u.AvatarURL)
+	require.Equal(t, fixture.APNsToken, u.APNsToken)
+	require.True(t, u.UpdatedAt.After(fixture.UpdatedAt) || u.UpdatedAt.Equal(fixture.UpdatedAt))
 }
 
-func TestUpdate_ClearDisplayName(t *testing.T) {
+func TestUpdateDisplayName_ClearWithEmptyString(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := repository.NewUserPg(pool)
 	ctx := context.Background()
@@ -156,16 +162,66 @@ func TestUpdate_ClearDisplayName(t *testing.T) {
 		DisplayName: ptr(ptr("Bob")),
 	})
 
-	updated, err := repo.Update(ctx, domain.User{ID: fixture.ID, DisplayName: nil, AvatarURL: nil})
+	err := repo.UpdateDisplayName(ctx, fixture.ID, "")
 	require.NoError(t, err)
-	require.Nil(t, updated.DisplayName)
+
+	u, err := repo.GetByID(ctx, fixture.ID)
+	require.NoError(t, err)
+	require.Nil(t, u.DisplayName)
 }
 
-func TestUpdate_NotFound(t *testing.T) {
+func TestUpdateDisplayName_NotFound(t *testing.T) {
 	pool := testutil.SetupTestDB(t)
 	repo := repository.NewUserPg(pool)
 
-	_, err := repo.Update(context.Background(), domain.User{ID: uuid.New()})
+	err := repo.UpdateDisplayName(context.Background(), uuid.New(), "Alice")
+	require.True(t, errors.Is(err, domain.ErrNotFound))
+}
+
+// --- UpdateAvatarURL ---
+
+func TestUpdateAvatarURL_Set(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	repo := repository.NewUserPg(pool)
+	ctx := context.Background()
+
+	fixture := testutil.CreateUser(t, pool, &testutil.UserOverrides{
+		DisplayName: ptr(ptr("Carol")),
+	})
+
+	err := repo.UpdateAvatarURL(ctx, fixture.ID, "https://example.com/avatar.png")
+	require.NoError(t, err)
+
+	u, err := repo.GetByID(ctx, fixture.ID)
+	require.NoError(t, err)
+	require.NotNil(t, u.AvatarURL)
+	require.Equal(t, "https://example.com/avatar.png", *u.AvatarURL)
+	// DisplayName untouched
+	require.Equal(t, fixture.DisplayName, u.DisplayName)
+}
+
+func TestUpdateAvatarURL_ClearWithEmptyString(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	repo := repository.NewUserPg(pool)
+	ctx := context.Background()
+
+	fixture := testutil.CreateUser(t, pool, &testutil.UserOverrides{
+		AvatarURL: ptr(ptr("https://example.com/old.png")),
+	})
+
+	err := repo.UpdateAvatarURL(ctx, fixture.ID, "")
+	require.NoError(t, err)
+
+	u, err := repo.GetByID(ctx, fixture.ID)
+	require.NoError(t, err)
+	require.Nil(t, u.AvatarURL)
+}
+
+func TestUpdateAvatarURL_NotFound(t *testing.T) {
+	pool := testutil.SetupTestDB(t)
+	repo := repository.NewUserPg(pool)
+
+	err := repo.UpdateAvatarURL(context.Background(), uuid.New(), "https://example.com/x.png")
 	require.True(t, errors.Is(err, domain.ErrNotFound))
 }
 

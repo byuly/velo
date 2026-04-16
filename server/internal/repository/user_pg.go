@@ -70,22 +70,6 @@ func (r *userPg) UpsertByAppleSub(ctx context.Context, sub string) (domain.User,
 	return u, nil
 }
 
-func (r *userPg) Update(ctx context.Context, user domain.User) (domain.User, error) {
-	u, err := scanUser(r.pool.QueryRow(ctx, `
-		UPDATE users
-		SET display_name = $2, avatar_url = $3, updated_at = now()
-		WHERE id = $1
-		RETURNING id, apple_sub, display_name, avatar_url, apns_token, created_at, updated_at`,
-		user.ID, user.DisplayName, user.AvatarURL))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.User{}, domain.ErrNotFound
-		}
-		return domain.User{}, fmt.Errorf("update user: %w", err)
-	}
-	return u, nil
-}
-
 func (r *userPg) Delete(ctx context.Context, id uuid.UUID) error {
 	tag, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
 	if err != nil {
@@ -97,15 +81,29 @@ func (r *userPg) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (r *userPg) UpdateDisplayName(ctx context.Context, id uuid.UUID, name string) error {
+	return r.updateNullableText(ctx, id, "display_name", name, "update display name")
+}
+
+func (r *userPg) UpdateAvatarURL(ctx context.Context, id uuid.UUID, url string) error {
+	return r.updateNullableText(ctx, id, "avatar_url", url, "update avatar url")
+}
+
 func (r *userPg) UpdateAPNsToken(ctx context.Context, id uuid.UUID, token string) error {
-	var tok *string
-	if token != "" {
-		tok = &token
+	return r.updateNullableText(ctx, id, "apns_token", token, "update apns token")
+}
+
+// updateNullableText sets a single nullable TEXT column. Empty value stores
+// NULL; column name is a constant at every call site, never user input.
+func (r *userPg) updateNullableText(ctx context.Context, id uuid.UUID, column, value, errCtx string) error {
+	var v *string
+	if value != "" {
+		v = &value
 	}
-	tag, err := r.pool.Exec(ctx, `
-		UPDATE users SET apns_token = $2, updated_at = now() WHERE id = $1`, id, tok)
+	query := fmt.Sprintf(`UPDATE users SET %s = $2, updated_at = now() WHERE id = $1`, column)
+	tag, err := r.pool.Exec(ctx, query, id, v)
 	if err != nil {
-		return fmt.Errorf("update apns token: %w", err)
+		return fmt.Errorf("%s: %w", errCtx, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound
