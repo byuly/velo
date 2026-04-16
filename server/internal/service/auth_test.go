@@ -41,10 +41,13 @@ func (m *mockUserRepo) GetByAppleSub(_ context.Context, _ string) (domain.User, 
 func (m *mockUserRepo) UpsertByAppleSub(_ context.Context, _ string) (domain.User, error) {
 	return m.upsertResult, m.upsertErr
 }
-func (m *mockUserRepo) Update(_ context.Context, _ domain.User) (domain.User, error) {
+func (m *mockUserRepo) Delete(_ context.Context, _ uuid.UUID) error { panic("not implemented") }
+func (m *mockUserRepo) UpdateDisplayName(_ context.Context, _ uuid.UUID, _ string) error {
 	panic("not implemented")
 }
-func (m *mockUserRepo) Delete(_ context.Context, _ uuid.UUID) error { panic("not implemented") }
+func (m *mockUserRepo) UpdateAvatarURL(_ context.Context, _ uuid.UUID, _ string) error {
+	panic("not implemented")
+}
 func (m *mockUserRepo) UpdateAPNsToken(_ context.Context, _ uuid.UUID, _ string) error {
 	panic("not implemented")
 }
@@ -54,10 +57,13 @@ var _ repository.UserRepository = (*mockUserRepo)(nil)
 type mockTokenRepo struct {
 	createResult domain.RefreshToken
 	createErr    error
-	capturedHash string // records the hash passed to Create
+	capturedHash string
 
 	getResult domain.RefreshToken
 	getErr    error
+
+	deleteByUserIDErr    error
+	deleteByUserIDCalled bool
 }
 
 func (m *mockTokenRepo) Create(_ context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) (domain.RefreshToken, error) {
@@ -76,16 +82,40 @@ func (m *mockTokenRepo) GetByHash(_ context.Context, hash string) (domain.Refres
 }
 func (m *mockTokenRepo) Delete(_ context.Context, _ uuid.UUID) error { panic("not implemented") }
 func (m *mockTokenRepo) DeleteByUserID(_ context.Context, _ uuid.UUID) error {
-	panic("not implemented")
+	m.deleteByUserIDCalled = true
+	return m.deleteByUserIDErr
 }
 
 var _ repository.TokenRepository = (*mockTokenRepo)(nil)
 
+type mockBlocklist struct {
+	blocked map[string]bool
+	err     error
+}
+
+func (m *mockBlocklist) Block(_ context.Context, jti string, _ time.Duration) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.blocked[jti] = true
+	return nil
+}
+
+func (m *mockBlocklist) IsBlocked(_ context.Context, jti string) (bool, error) {
+	if m.err != nil {
+		return false, m.err
+	}
+	return m.blocked[jti], nil
+}
+
 // --- Helpers ---
 
 func newJWT() *auth.JWTManager {
-	// secret must be >=32 bytes for HS256
 	return auth.NewJWTManager("test-secret-that-is-32-bytes-long", "velo")
+}
+
+func newBlocklist() *mockBlocklist {
+	return &mockBlocklist{blocked: map[string]bool{}}
 }
 
 func sha256hex(s string) string {
@@ -103,7 +133,7 @@ func TestSignInWithApple_Success(t *testing.T) {
 	tokens := &mockTokenRepo{}
 	jwtMgr := newJWT()
 
-	svc := service.NewAuthService(users, tokens, apple, jwtMgr)
+	svc := service.NewAuthService(users, tokens, apple, jwtMgr, newBlocklist())
 	accessToken, refreshToken, gotUser, err := svc.SignInWithApple(ctx, "apple-identity-token")
 
 	require.NoError(t, err)
@@ -111,12 +141,10 @@ func TestSignInWithApple_Success(t *testing.T) {
 	require.NotEmpty(t, refreshToken)
 	require.Equal(t, user, gotUser)
 
-	// Access token must be a valid JWT for the correct user
 	claims, err := jwtMgr.ParseAccessToken(accessToken)
 	require.NoError(t, err)
 	require.Equal(t, user.ID, claims.UserID)
 
-	// Stored hash must match sha256(refreshToken)
 	require.Equal(t, sha256hex(refreshToken), tokens.capturedHash)
 }
 
@@ -126,9 +154,23 @@ func TestSignInWithApple_InvalidAppleToken(t *testing.T) {
 		&mockTokenRepo{},
 		&mockApple{err: errors.New("bad apple token")},
 		newJWT(),
+		newBlocklist(),
 	)
 
 	_, _, _, err := svc.SignInWithApple(context.Background(), "bad-token")
+	require.True(t, errors.Is(err, domain.ErrUnauthorized))
+}
+
+func TestSignInWithApple_EmptyAppleSub(t *testing.T) {
+	svc := service.NewAuthService(
+		&mockUserRepo{},
+		&mockTokenRepo{},
+		&mockApple{sub: ""}, // misbehaving validator returns empty sub with no error
+		newJWT(),
+		newBlocklist(),
+	)
+
+	_, _, _, err := svc.SignInWithApple(context.Background(), "token")
 	require.True(t, errors.Is(err, domain.ErrUnauthorized))
 }
 
@@ -138,11 +180,11 @@ func TestSignInWithApple_UpsertError(t *testing.T) {
 		&mockTokenRepo{},
 		&mockApple{sub: "sub_123"},
 		newJWT(),
+		newBlocklist(),
 	)
 
 	_, _, _, err := svc.SignInWithApple(context.Background(), "valid-token")
 	require.Error(t, err)
-	// Should NOT be ErrUnauthorized — this is an internal error (→ 500 in handler)
 	require.False(t, errors.Is(err, domain.ErrUnauthorized))
 }
 
@@ -160,7 +202,7 @@ func TestRefresh_Success(t *testing.T) {
 			ExpiresAt: time.Now().Add(24 * time.Hour),
 		},
 	}
-	svc := service.NewAuthService(&mockUserRepo{}, tokens, &mockApple{}, jwtMgr)
+	svc := service.NewAuthService(&mockUserRepo{}, tokens, &mockApple{}, jwtMgr, newBlocklist())
 
 	accessToken, err := svc.Refresh(ctx, "some-refresh-token")
 	require.NoError(t, err)
@@ -173,7 +215,7 @@ func TestRefresh_Success(t *testing.T) {
 
 func TestRefresh_NotFound(t *testing.T) {
 	tokens := &mockTokenRepo{getErr: domain.ErrNotFound}
-	svc := service.NewAuthService(&mockUserRepo{}, tokens, &mockApple{}, newJWT())
+	svc := service.NewAuthService(&mockUserRepo{}, tokens, &mockApple{}, newJWT(), newBlocklist())
 
 	_, err := svc.Refresh(context.Background(), "nonexistent-token")
 	require.True(t, errors.Is(err, domain.ErrUnauthorized))
@@ -184,11 +226,85 @@ func TestRefresh_Expired(t *testing.T) {
 		getResult: domain.RefreshToken{
 			ID:        uuid.New(),
 			UserID:    uuid.New(),
-			ExpiresAt: time.Now().Add(-24 * time.Hour), // in the past
+			ExpiresAt: time.Now().Add(-24 * time.Hour),
 		},
 	}
-	svc := service.NewAuthService(&mockUserRepo{}, tokens, &mockApple{}, newJWT())
+	svc := service.NewAuthService(&mockUserRepo{}, tokens, &mockApple{}, newJWT(), newBlocklist())
 
 	_, err := svc.Refresh(context.Background(), "expired-token")
 	require.True(t, errors.Is(err, domain.ErrUnauthorized))
+}
+
+// --- Logout ---
+
+func TestLogout_RevokesRefreshAndBlocksJTI(t *testing.T) {
+	ctx := context.Background()
+	tokens := &mockTokenRepo{}
+	bl := newBlocklist()
+	jwtMgr := newJWT()
+
+	userID := uuid.New()
+	accessToken, err := jwtMgr.CreateAccessToken(userID)
+	require.NoError(t, err)
+	claims, err := jwtMgr.ParseAccessToken(accessToken)
+	require.NoError(t, err)
+
+	svc := service.NewAuthService(&mockUserRepo{}, tokens, &mockApple{}, jwtMgr, bl)
+	err = svc.Logout(ctx, claims)
+
+	require.NoError(t, err)
+	require.True(t, tokens.deleteByUserIDCalled)
+	require.True(t, bl.blocked[claims.JTI])
+}
+
+func TestLogout_DeleteByUserIDError(t *testing.T) {
+	tokens := &mockTokenRepo{deleteByUserIDErr: errors.New("db down")}
+	bl := newBlocklist()
+
+	claims := auth.AccessTokenClaims{
+		UserID:    uuid.New(),
+		JTI:       uuid.NewString(),
+		ExpiresAt: time.Now().Add(30 * time.Minute),
+	}
+
+	svc := service.NewAuthService(&mockUserRepo{}, tokens, &mockApple{}, newJWT(), bl)
+	err := svc.Logout(context.Background(), claims)
+
+	require.Error(t, err)
+	require.Empty(t, bl.blocked)
+}
+
+func TestLogout_BlocklistError(t *testing.T) {
+	tokens := &mockTokenRepo{}
+	bl := &mockBlocklist{blocked: map[string]bool{}, err: errors.New("redis down")}
+
+	claims := auth.AccessTokenClaims{
+		UserID:    uuid.New(),
+		JTI:       uuid.NewString(),
+		ExpiresAt: time.Now().Add(30 * time.Minute),
+	}
+
+	svc := service.NewAuthService(&mockUserRepo{}, tokens, &mockApple{}, newJWT(), bl)
+	err := svc.Logout(context.Background(), claims)
+
+	require.Error(t, err)
+	require.True(t, tokens.deleteByUserIDCalled)
+}
+
+func TestLogout_ExpiredAccessToken_SkipsBlock(t *testing.T) {
+	tokens := &mockTokenRepo{}
+	bl := newBlocklist()
+
+	claims := auth.AccessTokenClaims{
+		UserID:    uuid.New(),
+		JTI:       uuid.NewString(),
+		ExpiresAt: time.Now().Add(-5 * time.Minute),
+	}
+
+	svc := service.NewAuthService(&mockUserRepo{}, tokens, &mockApple{}, newJWT(), bl)
+	err := svc.Logout(context.Background(), claims)
+
+	require.NoError(t, err)
+	require.True(t, tokens.deleteByUserIDCalled)
+	require.Empty(t, bl.blocked)
 }

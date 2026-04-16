@@ -18,36 +18,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type mockBlocklist struct {
-	blocked map[string]bool
-	err     error
+// --- mockAuthService ---
+
+type mockAuthService struct {
+	signInAccessToken  string
+	signInRefreshToken string
+	signInUser         domain.User
+	signInErr          error
+	refreshAccessToken string
+	refreshErr         error
+	logoutErr          error
+	logoutCalled       bool
 }
 
-func (m *mockBlocklist) Block(_ context.Context, jti string, _ time.Duration) error {
-	if m.err != nil {
-		return m.err
-	}
-	m.blocked[jti] = true
-	return nil
+func (m *mockAuthService) SignInWithApple(_ context.Context, _ string) (string, string, domain.User, error) {
+	return m.signInAccessToken, m.signInRefreshToken, m.signInUser, m.signInErr
 }
 
-func (m *mockBlocklist) IsBlocked(_ context.Context, jti string) (bool, error) {
-	if m.err != nil {
-		return false, m.err
-	}
-	return m.blocked[jti], nil
+func (m *mockAuthService) Refresh(_ context.Context, _ string) (string, error) {
+	return m.refreshAccessToken, m.refreshErr
 }
+
+func (m *mockAuthService) Logout(_ context.Context, _ auth.AccessTokenClaims) error {
+	m.logoutCalled = true
+	return m.logoutErr
+}
+
+var _ service.AuthService = (*mockAuthService)(nil)
+
+// --- Logout handler tests ---
 
 func TestLogout_Success(t *testing.T) {
 	manager := auth.NewJWTManager("test-secret", "velo")
-	bl := &mockBlocklist{blocked: map[string]bool{}}
-	h := NewAuthHandler(manager, bl, nil)
+	svc := &mockAuthService{}
+	h := NewAuthHandler(manager, svc)
 
 	userID := uuid.New()
 	token, err := manager.CreateAccessToken(userID)
-	require.NoError(t, err)
-
-	claims, err := manager.ParseAccessToken(token)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
@@ -57,13 +64,13 @@ func TestLogout_Success(t *testing.T) {
 	h.Logout(w, req)
 
 	assert.Equal(t, http.StatusNoContent, w.Code)
-	assert.True(t, bl.blocked[claims.JTI])
+	assert.True(t, svc.logoutCalled)
 }
 
 func TestLogout_MissingToken(t *testing.T) {
 	manager := auth.NewJWTManager("test-secret", "velo")
-	bl := &mockBlocklist{blocked: map[string]bool{}}
-	h := NewAuthHandler(manager, bl, nil)
+	svc := &mockAuthService{}
+	h := NewAuthHandler(manager, svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 	w := httptest.NewRecorder()
@@ -71,12 +78,13 @@ func TestLogout_MissingToken(t *testing.T) {
 	h.Logout(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.False(t, svc.logoutCalled)
 }
 
 func TestLogout_InvalidToken(t *testing.T) {
 	manager := auth.NewJWTManager("test-secret", "velo")
-	bl := &mockBlocklist{blocked: map[string]bool{}}
-	h := NewAuthHandler(manager, bl, nil)
+	svc := &mockAuthService{}
+	h := NewAuthHandler(manager, svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 	req.Header.Set("Authorization", "Bearer invalid-token")
@@ -85,6 +93,7 @@ func TestLogout_InvalidToken(t *testing.T) {
 	h.Logout(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.False(t, svc.logoutCalled)
 }
 
 func TestLogout_ExpiredToken(t *testing.T) {
@@ -96,11 +105,10 @@ func TestLogout_ExpiredToken(t *testing.T) {
 	token, err := manager.CreateAccessToken(userID)
 	require.NoError(t, err)
 
-	// Advance time past expiry — ParseAccessToken rejects expired tokens
 	manager.SetTimeFunc(func() time.Time { return now.Add(61 * time.Minute) })
 
-	bl := &mockBlocklist{blocked: map[string]bool{}}
-	h := NewAuthHandler(manager, bl, nil)
+	svc := &mockAuthService{}
+	h := NewAuthHandler(manager, svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -109,13 +117,13 @@ func TestLogout_ExpiredToken(t *testing.T) {
 	h.Logout(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
-	assert.Empty(t, bl.blocked)
+	assert.False(t, svc.logoutCalled)
 }
 
-func TestLogout_BlocklistError_Returns500(t *testing.T) {
+func TestLogout_ServiceError_Returns500(t *testing.T) {
 	manager := auth.NewJWTManager("test-secret", "velo")
-	bl := &mockBlocklist{blocked: map[string]bool{}, err: errors.New("redis down")}
-	h := NewAuthHandler(manager, bl, nil)
+	svc := &mockAuthService{logoutErr: errors.New("redis down")}
+	h := NewAuthHandler(manager, svc)
 
 	userID := uuid.New()
 	token, err := manager.CreateAccessToken(userID)
@@ -130,27 +138,6 @@ func TestLogout_BlocklistError_Returns500(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-// --- mockAuthService ---
-
-type mockAuthService struct {
-	signInAccessToken  string
-	signInRefreshToken string
-	signInUser         domain.User
-	signInErr          error
-	refreshAccessToken string
-	refreshErr         error
-}
-
-func (m *mockAuthService) SignInWithApple(_ context.Context, _ string) (string, string, domain.User, error) {
-	return m.signInAccessToken, m.signInRefreshToken, m.signInUser, m.signInErr
-}
-
-func (m *mockAuthService) Refresh(_ context.Context, _ string) (string, error) {
-	return m.refreshAccessToken, m.refreshErr
-}
-
-var _ service.AuthService = (*mockAuthService)(nil)
-
 // --- Apple handler tests ---
 
 func TestApple_Success(t *testing.T) {
@@ -160,7 +147,7 @@ func TestApple_Success(t *testing.T) {
 		signInRefreshToken: "refresh.tok",
 		signInUser:         domain.User{ID: userID, AppleSub: "sub_abc"},
 	}
-	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), &mockBlocklist{blocked: map[string]bool{}}, svc)
+	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/apple",
 		strings.NewReader(`{"identity_token":"valid-apple-tok"}`))
@@ -178,7 +165,7 @@ func TestApple_Success(t *testing.T) {
 }
 
 func TestApple_EmptyToken(t *testing.T) {
-	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), &mockBlocklist{blocked: map[string]bool{}}, &mockAuthService{})
+	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), &mockAuthService{})
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/apple",
 		strings.NewReader(`{"identity_token":""}`))
@@ -191,7 +178,7 @@ func TestApple_EmptyToken(t *testing.T) {
 }
 
 func TestApple_InvalidJSON(t *testing.T) {
-	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), &mockBlocklist{blocked: map[string]bool{}}, &mockAuthService{})
+	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), &mockAuthService{})
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/apple",
 		strings.NewReader(`not-json`))
@@ -205,7 +192,7 @@ func TestApple_InvalidJSON(t *testing.T) {
 
 func TestApple_ServiceError(t *testing.T) {
 	svc := &mockAuthService{signInErr: domain.ErrUnauthorized}
-	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), &mockBlocklist{blocked: map[string]bool{}}, svc)
+	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/apple",
 		strings.NewReader(`{"identity_token":"bad-tok"}`))
@@ -221,7 +208,7 @@ func TestApple_ServiceError(t *testing.T) {
 
 func TestRefresh_Success(t *testing.T) {
 	svc := &mockAuthService{refreshAccessToken: "new.access.tok"}
-	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), &mockBlocklist{blocked: map[string]bool{}}, svc)
+	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/refresh",
 		strings.NewReader(`{"refresh_token":"valid-refresh-tok"}`))
@@ -237,7 +224,7 @@ func TestRefresh_Success(t *testing.T) {
 }
 
 func TestRefresh_EmptyToken(t *testing.T) {
-	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), &mockBlocklist{blocked: map[string]bool{}}, &mockAuthService{})
+	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), &mockAuthService{})
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/refresh",
 		strings.NewReader(`{"refresh_token":""}`))
@@ -251,7 +238,7 @@ func TestRefresh_EmptyToken(t *testing.T) {
 
 func TestRefresh_Expired(t *testing.T) {
 	svc := &mockAuthService{refreshErr: domain.ErrUnauthorized}
-	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), &mockBlocklist{blocked: map[string]bool{}}, svc)
+	h := NewAuthHandler(auth.NewJWTManager("secret", "velo"), svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/refresh",
 		strings.NewReader(`{"refresh_token":"expired-tok"}`))

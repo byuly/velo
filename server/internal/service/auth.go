@@ -15,20 +15,22 @@ import (
 	"github.com/byuly/velo/server/internal/repository"
 )
 
-// AuthService handles Sign In with Apple and token refresh.
+// AuthService handles Sign In with Apple, token refresh, and logout.
 type AuthService interface {
 	SignInWithApple(ctx context.Context, identityToken string) (accessToken, refreshToken string, user domain.User, err error)
 	Refresh(ctx context.Context, refreshToken string) (accessToken string, err error)
+	Logout(ctx context.Context, claims auth.AccessTokenClaims) error
 }
 
 // Compile-time interface check.
 var _ AuthService = (*authService)(nil)
 
 type authService struct {
-	users  repository.UserRepository
-	tokens repository.TokenRepository
-	apple  auth.AppleValidator
-	jwt    *auth.JWTManager
+	users     repository.UserRepository
+	tokens    repository.TokenRepository
+	apple     auth.AppleValidator
+	jwt       *auth.JWTManager
+	blocklist auth.TokenBlocklist
 }
 
 func NewAuthService(
@@ -36,8 +38,9 @@ func NewAuthService(
 	tokens repository.TokenRepository,
 	apple auth.AppleValidator,
 	jwt *auth.JWTManager,
+	blocklist auth.TokenBlocklist,
 ) AuthService {
-	return &authService{users: users, tokens: tokens, apple: apple, jwt: jwt}
+	return &authService{users: users, tokens: tokens, apple: apple, jwt: jwt, blocklist: blocklist}
 }
 
 const refreshTokenTTL = 90 * 24 * time.Hour
@@ -45,6 +48,11 @@ const refreshTokenTTL = 90 * 24 * time.Hour
 func (s *authService) SignInWithApple(ctx context.Context, identityToken string) (string, string, domain.User, error) {
 	appleSub, err := s.apple.Validate(ctx, identityToken)
 	if err != nil {
+		return "", "", domain.User{}, domain.ErrUnauthorized
+	}
+	// Defense-in-depth: AppleValidator already rejects empty sub, but a miswired
+	// or buggy validator shouldn't be able to create a rows-lacking-apple_sub user.
+	if appleSub == "" {
 		return "", "", domain.User{}, domain.ErrUnauthorized
 	}
 
@@ -89,6 +97,20 @@ func (s *authService) Refresh(ctx context.Context, refreshToken string) (string,
 	}
 
 	return accessToken, nil
+}
+
+func (s *authService) Logout(ctx context.Context, claims auth.AccessTokenClaims) error {
+	if err := s.tokens.DeleteByUserID(ctx, claims.UserID); err != nil {
+		return fmt.Errorf("revoke refresh tokens: %w", err)
+	}
+
+	if remaining := time.Until(claims.ExpiresAt); remaining > 0 {
+		if err := s.blocklist.Block(ctx, claims.JTI, remaining); err != nil {
+			return fmt.Errorf("revoke access token: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // generateRefreshToken returns a cryptographically random 256-bit token

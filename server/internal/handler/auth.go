@@ -1,11 +1,9 @@
 package handler
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/byuly/velo/server/internal/auth"
 	"github.com/byuly/velo/server/internal/domain"
@@ -13,13 +11,12 @@ import (
 )
 
 type AuthHandler struct {
-	jwt       *auth.JWTManager
-	blocklist auth.TokenBlocklist
-	svc       service.AuthService
+	jwt *auth.JWTManager
+	svc service.AuthService
 }
 
-func NewAuthHandler(jwt *auth.JWTManager, blocklist auth.TokenBlocklist, svc service.AuthService) *AuthHandler {
-	return &AuthHandler{jwt: jwt, blocklist: blocklist, svc: svc}
+func NewAuthHandler(jwt *auth.JWTManager, svc service.AuthService) *AuthHandler {
+	return &AuthHandler{jwt: jwt, svc: svc}
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
@@ -36,18 +33,12 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	remainingTTL := time.Until(claims.ExpiresAt)
-	if remainingTTL <= 0 {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	if err := h.blocklist.Block(r.Context(), claims.JTI, remainingTTL); err != nil {
-		slog.Error("failed to revoke token",
+	if err := h.svc.Logout(r.Context(), claims); err != nil {
+		slog.Error("failed to logout",
 			slog.String("error", err.Error()),
 			slog.String("jti", claims.JTI),
 		)
-		Error(w, fmt.Errorf("revoke token: %w", err))
+		Error(w, err)
 		return
 	}
 
