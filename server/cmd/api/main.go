@@ -12,9 +12,11 @@ import (
 
 	"github.com/byuly/velo/server/internal/auth"
 	"github.com/byuly/velo/server/internal/config"
-	dbmigrate "github.com/byuly/velo/server/internal/migrate"
 	apphandler "github.com/byuly/velo/server/internal/handler"
+	dbmigrate "github.com/byuly/velo/server/internal/migrate"
 	mw "github.com/byuly/velo/server/internal/middleware"
+	"github.com/byuly/velo/server/internal/repository"
+	"github.com/byuly/velo/server/internal/service"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -78,7 +80,11 @@ func main() {
 
 	// --- Auth ---
 	jwtManager := auth.NewJWTManager(cfg.JWTSecret, cfg.JWTIssuer)
-	authHandler := apphandler.NewAuthHandler(jwtManager, blocklist, nil) // svc wired in #22
+	userRepo := repository.NewUserPg(db)
+	tokenRepo := repository.NewTokenPg(db)
+	appleValidator := auth.NewAppleValidator(cfg.AppleAppID)
+	authSvc := service.NewAuthService(userRepo, tokenRepo, appleValidator, jwtManager, blocklist)
+	authHandler := apphandler.NewAuthHandler(jwtManager, authSvc)
 
 	// --- HTTP server ---
 	r := chi.NewRouter()
