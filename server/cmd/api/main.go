@@ -85,6 +85,8 @@ func main() {
 	appleValidator := auth.NewAppleValidator(cfg.AppleAppID)
 	authSvc := service.NewAuthService(userRepo, tokenRepo, appleValidator, jwtManager, blocklist)
 	authHandler := apphandler.NewAuthHandler(jwtManager, authSvc)
+	userSvc := service.NewUserService(userRepo, tokenRepo)
+	userHandler := apphandler.NewUserHandler(userSvc)
 
 	// --- HTTP server ---
 	r := chi.NewRouter()
@@ -120,6 +122,13 @@ func main() {
 	r.Route("/auth", func(r chi.Router) {
 		r.Use(mw.Auth(jwtManager, blocklist))
 		r.Post("/logout", authHandler.Logout)
+	})
+
+	r.Route("/users", func(r chi.Router) {
+		r.Use(mw.Auth(jwtManager, blocklist))
+		r.Get("/me", userHandler.GetMe)
+		r.Patch("/me", userHandler.UpdateMe)
+		r.Delete("/me", userHandler.DeleteMe)
 	})
 
 	srv := &http.Server{
